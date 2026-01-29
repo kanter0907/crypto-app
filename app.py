@@ -254,28 +254,20 @@ m3.metric("總損益率 (ROI)", f"{total_roi:.2f}%")
 
 st.markdown("---")
 
-# --- 第三區：圖表分析 (優化視覺版) ---
+# --- 第三區：圖表分析 ---
 st.subheader("📊 資產分佈與損益分析")
 
 pie_data = df_summary[df_summary["投入金額(U)"] > 0].copy()
 
-# ================================
-# 1. 優化圓餅圖：鮮豔顏色 + 數據標籤
-# ================================
+# 1. 圓餅圖：投入資金佔比
+base_pie = alt.Chart(pie_data).encode(theta=alt.Theta("投入金額(U)", stack=True))
 
-# 設定圓餅圖的基礎 (Base Chart)
-base_pie = alt.Chart(pie_data).encode(
-    theta=alt.Theta("投入金額(U)", stack=True)
-)
-
-# A. 圓餅圖：投入資金佔比
 pie_cost_arc = base_pie.mark_arc(innerRadius=60, outerRadius=120).encode(
-    color=alt.Color("幣種", scale=alt.Scale(scheme='category10'), legend=alt.Legend(title="幣種")), # 使用高對比顏色
+    color=alt.Color("幣種", scale=alt.Scale(scheme='category10'), legend=alt.Legend(title="幣種")),
     order=alt.Order("投入金額(U)", sort="descending"),
     tooltip=["幣種", alt.Tooltip("投入金額(U)", format=",.2f"), alt.Tooltip("投入佔比", format=".1f", title="佔比(%)")]
 )
 
-# A-2. 文字標籤 (顯示佔比)
 pie_cost_text = base_pie.mark_text(radius=140).encode(
     text=alt.Text("投入佔比", format=".1f"),
     order=alt.Order("投入金額(U)", sort="descending"),
@@ -284,13 +276,11 @@ pie_cost_text = base_pie.mark_text(radius=140).encode(
 chart_cost = (pie_cost_arc + pie_cost_text).properties(title="🟠 投入資金佔比 (Cost %)")
 
 
-# B. 圓餅圖：市值佔比
-base_pie_mkt = alt.Chart(pie_data).encode(
-    theta=alt.Theta("目前市值(U)", stack=True)
-)
+# 2. 圓餅圖：市值佔比
+base_pie_mkt = alt.Chart(pie_data).encode(theta=alt.Theta("目前市值(U)", stack=True))
 
 pie_mkt_arc = base_pie_mkt.mark_arc(innerRadius=60, outerRadius=120).encode(
-    color=alt.Color("幣種", scale=alt.Scale(scheme='category10'), legend=None), # 隱藏圖例避免重複
+    color=alt.Color("幣種", scale=alt.Scale(scheme='category10'), legend=None),
     order=alt.Order("目前市值(U)", sort="descending"),
     tooltip=["幣種", alt.Tooltip("目前市值(U)", format=",.2f"), alt.Tooltip("市值佔比", format=".1f", title="佔比(%)")]
 )
@@ -311,12 +301,12 @@ with col_pie2:
 
 
 # ================================
-# 2. 優化直方圖：數據標籤 (文字)
+# 3. 直方圖優化 (拆分正負文字標籤以避免 TypeError)
 # ================================
 st.markdown("#### 🔻 損益分析 (PnL)")
 bar_data = df_summary.copy()
 
-# C. 直方圖：損益金額
+# A. 直方圖：損益金額
 base_bar_amt = alt.Chart(bar_data).encode(x=alt.X("幣種", sort="-y"))
 
 bar_amt = base_bar_amt.mark_bar().encode(
@@ -329,23 +319,29 @@ bar_amt = base_bar_amt.mark_bar().encode(
     tooltip=["幣種", alt.Tooltip("損益金額(U)", format=",.2f")]
 )
 
-# 數值文字 (正數顯示在上方，負數顯示在下方)
-text_amt = base_bar_amt.mark_text(
-    align='center',
-    baseline='bottom',
-    dy=-5  # 預設向上偏移
-).encode(
+# 修正重點：拆分正負文字標籤
+# 正數標籤 (顯示在上方)
+text_amt_pos = base_bar_amt.mark_text(align='center', baseline='bottom', dy=-5).encode(
     y="損益金額(U)",
     text=alt.Text("損益金額(U)", format=",.0f"),
-    # 動態調整位置：如果小於0，改為向下偏移
-    dy=alt.condition(alt.datum['損益金額(U)'] < 0, alt.value(15), alt.value(-5)),
     color=alt.value("black")
+).transform_filter(
+    alt.datum['損益金額(U)'] >= 0
 )
 
-chart_amt = (bar_amt + text_amt).properties(title="💵 各幣種損益金額 (Amount)")
+# 負數標籤 (顯示在下方)
+text_amt_neg = base_bar_amt.mark_text(align='center', baseline='top', dy=5).encode(
+    y="損益金額(U)",
+    text=alt.Text("損益金額(U)", format=",.0f"),
+    color=alt.value("black")
+).transform_filter(
+    alt.datum['損益金額(U)'] < 0
+)
+
+chart_amt = (bar_amt + text_amt_pos + text_amt_neg).properties(title="💵 各幣種損益金額 (Amount)")
 
 
-# D. 直方圖：損益率
+# B. 直方圖：損益率
 base_bar_pct = alt.Chart(bar_data).encode(x=alt.X("幣種", sort="-y"))
 
 bar_pct = base_bar_pct.mark_bar().encode(
@@ -358,18 +354,25 @@ bar_pct = base_bar_pct.mark_bar().encode(
     tooltip=["幣種", alt.Tooltip("損益率", format=".2f", title="損益率(%)")]
 )
 
-text_pct = base_bar_pct.mark_text(
-    align='center',
-    baseline='bottom',
-    dy=-5
-).encode(
+# 正數標籤
+text_pct_pos = base_bar_pct.mark_text(align='center', baseline='bottom', dy=-5).encode(
     y="損益率",
-    text=alt.Text("損益率", format=".1f"), # 顯示一位小數
-    dy=alt.condition(alt.datum['損益率'] < 0, alt.value(15), alt.value(-5)),
+    text=alt.Text("損益率", format=".1f"),
     color=alt.value("black")
+).transform_filter(
+    alt.datum['損益率'] >= 0
 )
 
-chart_pct = (bar_pct + text_pct).properties(title="📈 各幣種損益率 (ROI %)")
+# 負數標籤
+text_pct_neg = base_bar_pct.mark_text(align='center', baseline='top', dy=5).encode(
+    y="損益率",
+    text=alt.Text("損益率", format=".1f"),
+    color=alt.value("black")
+).transform_filter(
+    alt.datum['損益率'] < 0
+)
+
+chart_pct = (bar_pct + text_pct_pos + text_pct_neg).properties(title="📈 各幣種損益率 (ROI %)")
 
 # 顯示直方圖
 col_bar1, col_bar2 = st.columns(2)
