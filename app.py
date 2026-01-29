@@ -72,10 +72,11 @@ def load_google_sheet(url, sheet_type="tx"):
                     
         return df
     except Exception as e:
-        st.error(f"❌ {sheet_type} 表讀取失敗: {e}")
+        # 這裡不使用 st.error 以避免快取問題，改回傳空表
         return pd.DataFrame()
 
 # 2. 自動搜尋 ID (快取 24 小時)
+# 修正：移除所有 UI 指令，只負責運算
 @st.cache_data(ttl=86400)
 def find_coin_id(symbol):
     if not isinstance(symbol, str): return None
@@ -83,7 +84,7 @@ def find_coin_id(symbol):
     search_url = f"https://api.coingecko.com/api/v3/search?query={clean_symbol}"
     headers = {"User-Agent": "Mozilla/5.0"} 
     try:
-        time.sleep(1) 
+        time.sleep(1)
         res = requests.get(search_url, headers=headers, timeout=5).json()
         if "coins" in res and len(res["coins"]) > 0:
             return res["coins"][0]["id"]
@@ -92,6 +93,7 @@ def find_coin_id(symbol):
         return None
 
 # 3. 抓取幣價 (快取 10 分鐘)
+# 修正：移除 st.toast 等 UI 指令，避免 CacheReplayClosureError
 @st.cache_data(ttl=600)
 def get_live_prices_auto(symbols):
     known_mapping = {
@@ -118,6 +120,7 @@ def get_live_prices_auto(symbols):
         else:
             unknown_symbols.append(s)
     
+    # 未知幣種自動搜尋
     for s in unknown_symbols:
         fid = find_coin_id(s)
         if fid: final_ids[s] = fid
@@ -137,12 +140,10 @@ def get_live_prices_auto(symbols):
                 if cid in data:
                     prices[sym] = data[cid]['usd']
             return prices
-        elif res.status_code == 429:
-            st.toast("⚠️ API 請求過於頻繁，請稍後再試", icon="⏳")
-            return {}
         else:
+            # 這裡回傳空字典，錯誤訊息留給主程式判斷
             return {}
-    except Exception as e:
+    except Exception:
         return {}
 
 # ==========================================
@@ -153,7 +154,7 @@ df_usdt = load_google_sheet(USDT_SHEET_URL, sheet_type="usdt")
 df_tx = load_google_sheet(TX_SHEET_URL, sheet_type="tx")
 
 if df_usdt.empty or df_tx.empty:
-    st.warning("⚠️ 等待資料讀取中... 請確認兩個分頁的網址都已填入。")
+    st.warning("⚠️ 等待資料讀取中... 請確認網址或等待 Google 更新。")
     st.stop()
 
 # 計算匯率
@@ -181,10 +182,12 @@ with st.sidebar:
     unique_coins = df_tx["幣種"].unique().tolist()
     unique_coins = [x for x in unique_coins if x != "nan" and x != "0"]
     
+    # 抓取價格
     current_prices = get_live_prices_auto(unique_coins)
     
-    if not current_prices:
-        st.error("⚠️ 無法獲取價格 (API 忙線中)，目前顯示為 0。")
+    # 錯誤判斷移到這裡 (主程式)，這樣就不會報錯了
+    if not current_prices and len(unique_coins) > 0:
+        st.warning("⚠️ API 暫時忙線，無法獲取價格，目前顯示為 0。")
     
     st.write("---")
     st.caption(f"上次更新: {time.strftime('%H:%M:%S')}")
@@ -200,11 +203,14 @@ df_summary["平均成本(U)"] = df_summary.apply(lambda x: x["投入金額(U)"] 
 df_summary["目前幣價"] = df_summary["幣種"].map(current_prices).fillna(0)
 df_summary["目前市值(U)"] = df_summary["持有顆數"] * df_summary["目前幣價"]
 df_summary["損益金額(U)"] = df_summary["目前市值(U)"] - df_summary["投入金額(U)"]
+
+# 損益率計算 (包含 -100% 的處理)
 df_summary["損益率"] = df_summary.apply(lambda x: (x["損益金額(U)"] / x["投入金額(U)"] * 100) if x["投入金額(U)"] > 0 else 0, axis=1)
 
 total_invested_in_coins = df_summary["投入金額(U)"].sum()
 total_portfolio_value = df_summary["目前市值(U)"].sum()
 
+# 佔比計算 (百分比)
 df_summary["投入佔比"] = df_summary.apply(lambda x: (x["投入金額(U)"] / total_invested_in_coins * 100) if total_invested_in_coins > 0 else 0, axis=1)
 df_summary["市值佔比"] = df_summary.apply(lambda x: (x["目前市值(U)"] / total_portfolio_value * 100) if total_portfolio_value > 0 else 0, axis=1)
 
@@ -217,9 +223,7 @@ st.subheader("💰 資金池與動態匯率")
 col_a, col_b, col_c = st.columns(3)
 col_a.metric("🇹🇼 總投入台幣本金", f"${total_twd_in:,.0f}")
 col_b.metric("🇺🇸 總買入 USDT", f"${total_usdt_got:,.2f}")
-
-# ✨ 修改處：改為顯示小數點第 2 位
-col_c.metric("💱 真實平均匯率", f"{avg_exchange_rate:.2f} TWD/U")
+col_c.metric("💱 真實平均匯率", f"{avg_exchange_rate:.2f} TWD/U") # 修正為 2 位小數
 
 st.markdown("---")
 
