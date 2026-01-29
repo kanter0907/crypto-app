@@ -2,23 +2,23 @@ import streamlit as st
 import pandas as pd
 import requests
 import time
-import re # 引入正規表達式來處理 "200u" 這種字串
+import re
 from io import BytesIO
 
 # --- 網頁設定 ---
-st.set_page_config(page_title="Crypto 專業投資看板", layout="wide", page_icon="📊")
-st.title("📊 Crypto 專業投資看板 (交易明細版)")
+st.set_page_config(page_title="Crypto 專業投資看板", layout="wide", page_icon="🚀")
+st.title("🚀 Crypto 專業投資看板 (績效專注版)")
 
 # ==========================================
 # ⚠️ 請在此處填入你的 Google 試算表網址 ⚠️
 # ==========================================
-LOAN_SHEET_URL = "https://docs.google.com/spreadsheets/d/1PoE-eQHnp1m5EwG7eVc14fvrSNSXdwNxdB8LEnhsQoE/edit?gid=608628357#gid=608628357"
+# 注意：現在只需要 Crypto (交易明細) 的網址即可
 CRYPTO_SHEET_URL = "https://docs.google.com/spreadsheets/d/1PoE-eQHnp1m5EwG7eVc14fvrSNSXdwNxdB8LEnhsQoE/edit?gid=0#gid=0"
 
 # ==========================================
 
-# 1. 讀取資料函式 (增強版：智慧欄位對應 + 資料清洗)
-def load_google_sheet(url, sheet_type="tx"):
+# 1. 讀取資料函式 (含防呆清洗)
+def load_google_sheet(url):
     try:
         if "edit#gid=" in url:
             export_url = url.replace("edit#gid=", "export?format=csv&gid=")
@@ -35,48 +35,45 @@ def load_google_sheet(url, sheet_type="tx"):
         df.columns = df.columns.str.strip() # 去除標題空白
         
         # --- 智慧欄位對應 ---
-        if sheet_type == "tx":
-            # 處理幣種
-            if "幣種" not in df.columns:
-                for col in ["Coin", "Symbol", "購買幣種"]:
-                    if col in df.columns:
-                        df.rename(columns={col: "幣種"}, inplace=True)
-                        break
-            # 處理金額
-            if "投入金額(U)" not in df.columns:
-                for col in ["金額", "Amount", "投入金額", "USDT"]:
-                    if col in df.columns:
-                        df.rename(columns={col: "投入金額(U)"}, inplace=True)
-                        break
-            # 處理顆數
-            if "持有顆數" not in df.columns:
-                for col in ["顆數", "Qty", "Quantity", "數量"]:
-                    if col in df.columns:
-                        df.rename(columns={col: "持有顆數"}, inplace=True)
-                        break
-
-            # --- 資料清洗防呆 (解決 "200u" 問題) ---
-            def clean_number(value):
-                # 把不是數字和小數點的東西都刪掉
-                if pd.isna(value): return 0
-                val_str = str(value)
-                # 只保留數字、負號和小數點
-                clean_val = re.sub(r'[^\d.-]', '', val_str) 
-                try:
-                    return float(clean_val)
-                except:
-                    return 0
-
-            if "幣種" in df.columns:
-                df["幣種"] = df["幣種"].astype(str).str.strip()
-            
-            for col in ["投入金額(U)", "持有顆數"]:
+        # 處理幣種
+        if "幣種" not in df.columns:
+            for col in ["Coin", "Symbol", "購買幣種"]:
                 if col in df.columns:
-                    # 套用清洗函式
-                    df[col] = df[col].apply(clean_number)
-                else:
-                    df[col] = 0.0 # 缺欄位補 0
-                    
+                    df.rename(columns={col: "幣種"}, inplace=True)
+                    break
+        # 處理金額
+        if "投入金額(U)" not in df.columns:
+            for col in ["金額", "Amount", "投入金額", "USDT"]:
+                if col in df.columns:
+                    df.rename(columns={col: "投入金額(U)"}, inplace=True)
+                    break
+        # 處理顆數
+        if "持有顆數" not in df.columns:
+            for col in ["顆數", "Qty", "Quantity", "數量"]:
+                if col in df.columns:
+                    df.rename(columns={col: "持有顆數"}, inplace=True)
+                    break
+
+        # --- 資料清洗防呆 (解決 "200u" 問題) ---
+        def clean_number(value):
+            if pd.isna(value): return 0
+            val_str = str(value)
+            # 只保留數字、負號和小數點
+            clean_val = re.sub(r'[^\d.-]', '', val_str) 
+            try:
+                return float(clean_val)
+            except:
+                return 0
+
+        if "幣種" in df.columns:
+            df["幣種"] = df["幣種"].astype(str).str.strip()
+        
+        for col in ["投入金額(U)", "持有顆數"]:
+            if col in df.columns:
+                df[col] = df[col].apply(clean_number)
+            else:
+                df[col] = 0.0 # 缺欄位補 0
+                
         return df
     except Exception as e:
         st.error(f"❌ 讀取失敗: {e}")
@@ -125,7 +122,6 @@ def get_live_prices_auto(symbols):
             unknown_symbols.append(s)
     
     if unknown_symbols:
-        # 使用 spinner 避免畫面跳動
         with st.spinner(f"🔍 搜尋新幣種 ID..."):
             for s in unknown_symbols:
                 fid = find_coin_id(s)
@@ -146,28 +142,21 @@ def get_live_prices_auto(symbols):
     except:
         return {}
 
-# 4. 文字變色函式 (替代原本的漸層色，解決 ImportError)
+# 4. 文字變色函式
 def color_pnl(val):
-    """
-    數值 > 0 : 綠色
-    數值 < 0 : 紅色
-    數值 = 0 : 黑色
-    """
     if isinstance(val, (int, float)):
-        if val > 0:
-            return 'color: #28a745; font-weight: bold;' # 綠色
-        elif val < 0:
-            return 'color: #dc3545; font-weight: bold;' # 紅色
+        if val > 0: return 'color: #28a745; font-weight: bold;' # 綠色
+        elif val < 0: return 'color: #dc3545; font-weight: bold;' # 紅色
     return ''
 
 # ==========================================
 # 主程式邏輯
 # ==========================================
 
-df_loan = load_google_sheet(LOAN_SHEET_URL, sheet_type="loan")
-df_tx = load_google_sheet(CRYPTO_SHEET_URL, sheet_type="tx")
+# 只讀取交易明細表
+df_tx = load_google_sheet(CRYPTO_SHEET_URL)
 
-if df_loan.empty or df_tx.empty:
+if df_tx.empty:
     st.warning("⚠️ 等待資料讀取中... 請確認網址正確。")
     st.stop()
 
@@ -190,12 +179,17 @@ with st.sidebar:
         for coin, p in current_prices.items():
             st.write(f"**{coin}**: ${p}")
 
-# --- 資料計算 ---
+# --- 資料計算 (核心) ---
 
-# 1. 計算每一筆的「購入單價」
+# 1. 確保基本欄位存在
+if not all(col in df_tx.columns for col in ["幣種", "投入金額(U)", "持有顆數"]):
+    st.error(f"❌ 缺少必要欄位！目前的欄位: {df_tx.columns.tolist()}")
+    st.stop()
+
+# 2. 計算每一筆的「購入單價」
 df_tx["購入單價"] = df_tx.apply(lambda x: x["投入金額(U)"] / x["持有顆數"] if x["持有顆數"] > 0 else 0, axis=1)
 
-# 2. 彙整 (Group By)
+# 3. 彙整 (Group By) 算出持倉總表
 clean_tx = df_tx[df_tx["幣種"] != "0"].copy()
 clean_tx = clean_tx[clean_tx["幣種"] != "nan"]
 
@@ -204,27 +198,21 @@ df_summary = clean_tx.groupby("幣種").agg({
     "持有顆數": "sum"
 }).reset_index()
 
-# 3. 計算平均成本與市值
+# 4. 計算平均成本與市值
 df_summary["平均成本(U)"] = df_summary.apply(lambda x: x["投入金額(U)"] / x["持有顆數"] if x["持有顆數"] > 0 else 0, axis=1)
 df_summary["目前幣價"] = df_summary["幣種"].map(current_prices).fillna(0)
 df_summary["目前市值(U)"] = df_summary["持有顆數"] * df_summary["目前幣價"]
 df_summary["損益金額(U)"] = df_summary["目前市值(U)"] - df_summary["投入金額(U)"]
 df_summary["損益率(%)"] = df_summary.apply(lambda x: (x["損益金額(U)"] / x["投入金額(U)"] * 100) if x["投入金額(U)"] > 0 else 0, axis=1)
 
-# 4. 計算佔比
+# 5. 計算總體指標 (由交易表統計)
 total_invested = df_summary["投入金額(U)"].sum()
 current_total_value = df_summary["目前市值(U)"].sum()
-df_summary["持倉佔比(%)"] = df_summary.apply(lambda x: (x["目前市值(U)"] / current_total_value * 100) if current_total_value > 0 else 0, axis=1)
+total_pnl = df_summary["損益金額(U)"].sum()
+total_pnl_pct = (total_pnl / total_invested * 100) if total_invested > 0 else 0
 
-# 5. 總資金池
-loan_total = 0
-if "總資金(USDT)" in df_loan.columns:
-    # 同樣套用清洗函式
-    clean_loan = re.sub(r'[^\d.-]', '', str(df_loan["總資金(USDT)"].iloc[0]))
-    try:
-        loan_total = float(clean_loan)
-    except:
-        loan_total = 0
+# 6. 計算佔比
+df_summary["持倉佔比(%)"] = df_summary.apply(lambda x: (x["目前市值(U)"] / current_total_value * 100) if current_total_value > 0 else 0, axis=1)
 
 # ==========================================
 # 頁面顯示
@@ -235,25 +223,22 @@ tab1, tab2 = st.tabs(["📈 總資產看板 (彙整)", "📝 交易明細 (清�
 with tab1:
     st.subheader("💰 總持倉價值與損益")
     
-    remaining_ammo = loan_total - total_invested
-    total_pnl = df_summary["損益金額(U)"].sum()
-    total_pnl_pct = (total_pnl / total_invested * 100) if total_invested > 0 else 0
-    
-    c1, c2, c3, c4 = st.columns(4)
+    # 優化後的 3 欄式設計 (移除剩餘子彈)
+    c1, c2, c3 = st.columns(3)
     c1.metric("總持倉價值 (USDT)", f"${current_total_value:,.2f}")
     c2.metric("總損益金額 (USDT)", f"${total_pnl:,.2f}", delta=f"{total_pnl:,.2f}")
     c3.metric("總損益率 (%)", f"{total_pnl_pct:.2f}%", delta=f"{total_pnl_pct:.2f}%")
-    c4.metric("剩餘子彈 (USDT)", f"${remaining_ammo:,.2f}")
 
     st.markdown("---")
     
+    # 核心指標 (TWD)
     st.caption(f"💡 台幣計算基準：1 USDT = {twd_rate} TWD")
     twd_val = current_total_value * twd_rate
     twd_pnl = total_pnl * twd_rate
     
-    c5, c6 = st.columns(2)
-    c5.metric("🇹🇼 總持倉價值 (台幣)", f"NT$ {twd_val:,.0f}")
-    c6.metric("🇹🇼 總損益金額 (台幣)", f"NT$ {twd_pnl:,.0f}", delta=f"{twd_pnl:,.0f}")
+    c4, c5 = st.columns(2)
+    c4.metric("🇹🇼 總持倉價值 (台幣)", f"NT$ {twd_val:,.0f}")
+    c5.metric("🇹🇼 總損益金額 (台幣)", f"NT$ {twd_pnl:,.0f}", delta=f"{twd_pnl:,.0f}")
     
     st.markdown("---")
     
@@ -267,7 +252,6 @@ with tab1:
     display_df = display_df.sort_values("目前市值(U)", ascending=False).reset_index(drop=True)
     display_df.index = display_df.index + 1
 
-    # 這裡做了關鍵修改：使用 applymap 而不是 background_gradient
     st.dataframe(
         display_df.style.format({
             "目前幣價": "{:.6f}",
@@ -284,7 +268,6 @@ with tab1:
 
 with tab2:
     st.subheader("🧾 購買清單與合計")
-    st.info("💡 資料來源：Google 試算表。若數值異常，程式已自動過濾文字 (例如 '200u' -> 200)。")
     
     if "幣種" in df_tx.columns:
         all_coins = ["全部"] + sorted(df_tx["幣種"].astype(str).unique().tolist())
