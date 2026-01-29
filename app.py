@@ -59,14 +59,21 @@ def find_coin_id(symbol):
     except:
         return None
 
-# --- 抓取幣價 (升級版：含 User-Agent) ---
+# --- 抓取幣價 (修正版：更正 NIGHT ID) ---
 def get_live_prices_auto(symbols):
-    # 預設清單 (大小寫不敏感)
+    # 預設清單 (在此修正特定幣種的 ID)
     known_mapping = {
-        "$ADA": "cardano", "$NIGHT": "night-verse", "$SNEK": "snek",
-        "$USDT": "tether", "$BTC": "bitcoin", "$ETH": "ethereum",
-        "$SOL": "solana", "$XRP": "ripple", "$DOGE": "dogecoin",
-        "$BNB": "binancecoin", "$PEPE": "pepe"
+        "$ADA": "cardano", 
+        "$NIGHT": "midnight-3",  # ✅ 已修正：對應到 coingecko.com/zh-tw/數字貨幣/midnight-3
+        "$SNEK": "snek",
+        "$USDT": "tether", 
+        "$BTC": "bitcoin", 
+        "$ETH": "ethereum",
+        "$SOL": "solana", 
+        "$XRP": "ripple", 
+        "$DOGE": "dogecoin",
+        "$BNB": "binancecoin", 
+        "$PEPE": "pepe"
     }
     
     final_ids = {}
@@ -74,7 +81,10 @@ def get_live_prices_auto(symbols):
 
     # 1. 比對已知清單 (忽略大小寫)
     for s in symbols:
-        s_upper = s.upper() # 轉大寫來比對
+        # 移除前後空白並轉大寫
+        clean_s = s.strip()
+        s_upper = clean_s.upper()
+        
         if s_upper in known_mapping:
             final_ids[s] = known_mapping[s_upper]
         else:
@@ -98,7 +108,7 @@ def get_live_prices_auto(symbols):
 
     # 3. 抓取價格
     url = f"https://api.coingecko.com/api/v3/simple/price?ids={','.join(ids_list)}&vs_currencies=usd"
-    headers = {"User-Agent": "Mozilla/5.0"} # 關鍵：加上 User-Agent
+    headers = {"User-Agent": "Mozilla/5.0"} 
     
     try:
         res = requests.get(url, headers=headers, timeout=10).json()
