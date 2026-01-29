@@ -6,20 +6,24 @@ import re
 from io import BytesIO
 
 # --- 網頁設定 ---
-st.set_page_config(page_title="Crypto 專業投資看板", layout="wide", page_icon="🚀")
-st.title("🚀 Crypto 專業投資看板 (績效專注版)")
+st.set_page_config(page_title="Crypto 資金戰情室", layout="wide", page_icon="🏦")
+st.title("🏦 Crypto 資金戰情室 (動態匯率版)")
 
 # ==========================================
 # ⚠️ 請在此處填入你的 Google 試算表網址 ⚠️
 # ==========================================
-# 注意：現在只需要 Crypto (交易明細) 的網址即可
-CRYPTO_SHEET_URL = "https://docs.google.com/spreadsheets/d/1PoE-eQHnp1m5EwG7eVc14fvrSNSXdwNxdB8LEnhsQoE/edit?gid=0#gid=0"
+# 1. 交易紀錄分頁 (紀錄買了什麼幣)
+TX_SHEET_URL = "https://docs.google.com/spreadsheets/d/1PoE-eQHnp1m5EwG7eVc14fvrSNSXdwNxdB8LEnhsQoE/edit?gid=0#gid=0"
+
+# 2. 資金紀錄分頁 (紀錄台幣買USDT) -> 這是新增的！
+USDT_SHEET_URL = "https://docs.google.com/spreadsheets/d/1PoE-eQHnp1m5EwG7eVc14fvrSNSXdwNxdB8LEnhsQoE/edit?gid=608628357#gid=608628357"
 
 # ==========================================
 
-# 1. 讀取資料函式 (含防呆清洗)
-def load_google_sheet(url):
+# 1. 讀取資料函式 (通用型)
+def load_google_sheet(url, sheet_type="tx"):
     try:
+        # 網址處理
         if "edit#gid=" in url:
             export_url = url.replace("edit#gid=", "export?format=csv&gid=")
         elif "edit?gid=" in url:
@@ -32,51 +36,50 @@ def load_google_sheet(url):
         response.raise_for_status()
 
         df = pd.read_csv(BytesIO(response.content), encoding='utf-8')
-        df.columns = df.columns.str.strip() # 去除標題空白
+        df.columns = df.columns.str.strip() 
         
-        # --- 智慧欄位對應 ---
-        # 處理幣種
-        if "幣種" not in df.columns:
-            for col in ["Coin", "Symbol", "購買幣種"]:
-                if col in df.columns:
-                    df.rename(columns={col: "幣種"}, inplace=True)
-                    break
-        # 處理金額
-        if "投入金額(U)" not in df.columns:
-            for col in ["金額", "Amount", "投入金額", "USDT"]:
-                if col in df.columns:
-                    df.rename(columns={col: "投入金額(U)"}, inplace=True)
-                    break
-        # 處理顆數
-        if "持有顆數" not in df.columns:
-            for col in ["顆數", "Qty", "Quantity", "數量"]:
-                if col in df.columns:
-                    df.rename(columns={col: "持有顆數"}, inplace=True)
-                    break
-
-        # --- 資料清洗防呆 (解決 "200u" 問題) ---
+        # --- 資料清洗與型別轉換 ---
         def clean_number(value):
             if pd.isna(value): return 0
             val_str = str(value)
-            # 只保留數字、負號和小數點
             clean_val = re.sub(r'[^\d.-]', '', val_str) 
             try:
                 return float(clean_val)
             except:
                 return 0
 
-        if "幣種" in df.columns:
-            df["幣種"] = df["幣種"].astype(str).str.strip()
-        
-        for col in ["投入金額(U)", "持有顆數"]:
-            if col in df.columns:
-                df[col] = df[col].apply(clean_number)
-            else:
-                df[col] = 0.0 # 缺欄位補 0
-                
+        # A. 針對「資金紀錄 (USDT Log)」的處理
+        if sheet_type == "usdt":
+            required = ["投入台幣", "買入USDT"]
+            # 簡單欄位對應
+            if "TWD" in df.columns: df.rename(columns={"TWD": "投入台幣"}, inplace=True)
+            if "USDT" in df.columns: df.rename(columns={"USDT": "買入USDT"}, inplace=True)
+            
+            for col in required:
+                if col in df.columns:
+                    df[col] = df[col].apply(clean_number)
+                else:
+                    df[col] = 0.0
+
+        # B. 針對「交易紀錄 (TX)」的處理
+        elif sheet_type == "tx":
+            # 欄位對應
+            if "幣種" not in df.columns and "Coin" in df.columns: df.rename(columns={"Coin": "幣種"}, inplace=True)
+            if "投入金額(U)" not in df.columns and "金額" in df.columns: df.rename(columns={"金額": "投入金額(U)"}, inplace=True)
+            if "持有顆數" not in df.columns and "顆數" in df.columns: df.rename(columns={"顆數": "持有顆數"}, inplace=True)
+            
+            if "幣種" in df.columns:
+                df["幣種"] = df["幣種"].astype(str).str.strip()
+            
+            for col in ["投入金額(U)", "持有顆數"]:
+                if col in df.columns:
+                    df[col] = df[col].apply(clean_number)
+                else:
+                    df[col] = 0.0
+                    
         return df
     except Exception as e:
-        st.error(f"❌ 讀取失敗: {e}")
+        st.error(f"❌ {sheet_type} 表讀取失敗: {e}")
         return pd.DataFrame()
 
 # 2. 自動搜尋 ID
@@ -142,158 +145,174 @@ def get_live_prices_auto(symbols):
     except:
         return {}
 
-# 4. 文字變色函式
-def color_pnl(val):
-    if isinstance(val, (int, float)):
-        if val > 0: return 'color: #28a745; font-weight: bold;' # 綠色
-        elif val < 0: return 'color: #dc3545; font-weight: bold;' # 紅色
-    return ''
-
 # ==========================================
 # 主程式邏輯
 # ==========================================
 
-# 只讀取交易明細表
-df_tx = load_google_sheet(CRYPTO_SHEET_URL)
+# 1. 讀取兩張表
+df_usdt = load_google_sheet(USDT_SHEET_URL, sheet_type="usdt")
+df_tx = load_google_sheet(TX_SHEET_URL, sheet_type="tx")
 
-if df_tx.empty:
-    st.warning("⚠️ 等待資料讀取中... 請確認網址正確。")
+if df_usdt.empty or df_tx.empty:
+    st.warning("⚠️ 等待資料讀取中... 請確認兩個分頁的網址都已填入。")
     st.stop()
 
-# --- 側邊欄 ---
+# 2. 計算資金池與匯率 (Requirement 1)
+total_twd_in = df_usdt["投入台幣"].sum()
+total_usdt_got = df_usdt["買入USDT"].sum()
+
+# 避免除以零
+if total_usdt_got > 0:
+    avg_exchange_rate = total_twd_in / total_usdt_got
+else:
+    avg_exchange_rate = 32.5 # 預設值
+
+# 3. 處理交易資料
+if not all(col in df_tx.columns for col in ["幣種", "投入金額(U)", "持有顆數"]):
+    st.error("❌ 交易表缺少必要欄位 (幣種, 投入金額(U), 持有顆數)")
+    st.stop()
+
+# 抓價格
 with st.sidebar:
-    st.header("⚙️ 設定與報價")
-    twd_rate = st.number_input("🇺🇸 USDT / 🇹🇼 TWD 匯率", value=32.50, step=0.1, format="%.2f")
-    
-    if st.button("🔄 刷新最新幣價"):
+    st.header("⚙️ 控制台")
+    if st.button("🔄 刷新數據"):
         find_coin_id.clear()
         st.cache_data.clear()
         st.rerun()
-
-    if "幣種" in df_tx.columns:
-        unique_coins = df_tx["幣種"].unique().tolist()
-        current_prices = get_live_prices_auto(unique_coins)
         
-        st.write("---")
-        st.write("📊 即時單價 (CoinGecko):")
-        for coin, p in current_prices.items():
-            st.write(f"**{coin}**: ${p}")
+    unique_coins = df_tx["幣種"].unique().tolist()
+    # 移除空值
+    unique_coins = [x for x in unique_coins if x != "nan" and x != "0"]
+    current_prices = get_live_prices_auto(unique_coins)
 
-# --- 資料計算 (核心) ---
+# --- 核心計算 (Aggregation) ---
+clean_tx = df_tx[df_tx["幣種"].isin(unique_coins)].copy()
 
-# 1. 確保基本欄位存在
-if not all(col in df_tx.columns for col in ["幣種", "投入金額(U)", "持有顆數"]):
-    st.error(f"❌ 缺少必要欄位！目前的欄位: {df_tx.columns.tolist()}")
-    st.stop()
-
-# 2. 計算每一筆的「購入單價」
-df_tx["購入單價"] = df_tx.apply(lambda x: x["投入金額(U)"] / x["持有顆數"] if x["持有顆數"] > 0 else 0, axis=1)
-
-# 3. 彙整 (Group By) 算出持倉總表
-clean_tx = df_tx[df_tx["幣種"] != "0"].copy()
-clean_tx = clean_tx[clean_tx["幣種"] != "nan"]
-
+# 依照幣種彙整
 df_summary = clean_tx.groupby("幣種").agg({
     "投入金額(U)": "sum",
     "持有顆數": "sum"
 }).reset_index()
 
-# 4. 計算平均成本與市值
+# 計算詳細指標
 df_summary["平均成本(U)"] = df_summary.apply(lambda x: x["投入金額(U)"] / x["持有顆數"] if x["持有顆數"] > 0 else 0, axis=1)
 df_summary["目前幣價"] = df_summary["幣種"].map(current_prices).fillna(0)
 df_summary["目前市值(U)"] = df_summary["持有顆數"] * df_summary["目前幣價"]
 df_summary["損益金額(U)"] = df_summary["目前市值(U)"] - df_summary["投入金額(U)"]
-df_summary["損益率(%)"] = df_summary.apply(lambda x: (x["損益金額(U)"] / x["投入金額(U)"] * 100) if x["投入金額(U)"] > 0 else 0, axis=1)
+df_summary["損益率"] = df_summary.apply(lambda x: (x["損益金額(U)"] / x["投入金額(U)"]) if x["投入金額(U)"] > 0 else 0, axis=1) # 這裡保持小數 (例如 0.05 代表 5%)
 
-# 5. 計算總體指標 (由交易表統計)
-total_invested = df_summary["投入金額(U)"].sum()
-current_total_value = df_summary["目前市值(U)"].sum()
+# 總體指標
+total_invested_in_coins = df_summary["投入金額(U)"].sum() # 實際買幣花掉的錢
+total_portfolio_value = df_summary["目前市值(U)"].sum()
+remaining_ammo = total_usdt_got - total_invested_in_coins # 剩餘子彈
+
+# 計算佔比 (Requirement 2 & 3)
+# 投入佔比 = 個別投入 / 總投入
+df_summary["投入佔比"] = df_summary.apply(lambda x: x["投入金額(U)"] / total_invested_in_coins if total_invested_in_coins > 0 else 0, axis=1)
+# 市值佔比 = 個別市值 / 總市值
+df_summary["市值佔比"] = df_summary.apply(lambda x: x["目前市值(U)"] / total_portfolio_value if total_portfolio_value > 0 else 0, axis=1)
+
+# ==========================================
+# 視覺化顯示 (Dashboard)
+# ==========================================
+
+# --- 第一區：資金池與匯率 (Req 1) ---
+st.subheader("💰 資金池與動態匯率")
+
+col_a, col_b, col_c, col_d = st.columns(4)
+
+col_a.metric("🇹🇼 總投入台幣本金", f"${total_twd_in:,.0f}")
+col_b.metric("🇺🇸 總買入 USDT", f"${total_usdt_got:,.2f}")
+col_c.metric("💱 真實平均匯率", f"{avg_exchange_rate:.4f} TWD/U", 
+             delta="動態計算" if total_usdt_got > 0 else "無資料", delta_color="off")
+col_d.metric("🔫 剩餘子彈 (USDT)", f"${remaining_ammo:,.2f}", 
+             delta=f"{remaining_ammo*avg_exchange_rate:,.0f} TWD")
+
+st.markdown("---")
+
+# --- 第二區：總持倉績效 ---
+st.subheader("📈 總持倉績效")
+
 total_pnl = df_summary["損益金額(U)"].sum()
-total_pnl_pct = (total_pnl / total_invested * 100) if total_invested > 0 else 0
+total_roi = (total_pnl / total_invested_in_coins) if total_invested_in_coins > 0 else 0
 
-# 6. 計算佔比
-df_summary["持倉佔比(%)"] = df_summary.apply(lambda x: (x["目前市值(U)"] / current_total_value * 100) if current_total_value > 0 else 0, axis=1)
+# 台幣估值 (使用真實匯率計算)
+twd_pnl = total_pnl * avg_exchange_rate
+twd_val = total_portfolio_value * avg_exchange_rate
 
-# ==========================================
-# 頁面顯示
-# ==========================================
+m1, m2, m3 = st.columns(3)
+m1.metric("總市值估算", f"${total_portfolio_value:,.2f} U", 
+          delta=f"≈ {twd_val:,.0f} TWD")
+m2.metric("總損益金額", f"${total_pnl:,.2f} U", 
+          delta=f"≈ {twd_pnl:,.0f} TWD")
+m3.metric("總損益率 (ROI)", f"{total_roi:.2%}")
 
-tab1, tab2 = st.tabs(["📈 總資產看板 (彙整)", "📝 交易明細 (清單)"])
+st.markdown("---")
 
-with tab1:
-    st.subheader("💰 總持倉價值與損益")
-    
-    # 優化後的 3 欄式設計 (移除剩餘子彈)
-    c1, c2, c3 = st.columns(3)
-    c1.metric("總持倉價值 (USDT)", f"${current_total_value:,.2f}")
-    c2.metric("總損益金額 (USDT)", f"${total_pnl:,.2f}", delta=f"{total_pnl:,.2f}")
-    c3.metric("總損益率 (%)", f"{total_pnl_pct:.2f}%", delta=f"{total_pnl_pct:.2f}%")
+# --- 第三區：個別幣種儀表板 (Req 2 & 3) ---
+st.subheader("📊 幣種詳細分析")
 
-    st.markdown("---")
-    
-    # 核心指標 (TWD)
-    st.caption(f"💡 台幣計算基準：1 USDT = {twd_rate} TWD")
-    twd_val = current_total_value * twd_rate
-    twd_pnl = total_pnl * twd_rate
-    
-    c4, c5 = st.columns(2)
-    c4.metric("🇹🇼 總持倉價值 (台幣)", f"NT$ {twd_val:,.0f}")
-    c5.metric("🇹🇼 總損益金額 (台幣)", f"NT$ {twd_pnl:,.0f}", delta=f"{twd_pnl:,.0f}")
-    
-    st.markdown("---")
-    
-    st.subheader("📊 各幣種持倉表現")
-    
-    display_df = df_summary[[
-        "幣種", "目前幣價", "持有顆數", "平均成本(U)", 
-        "投入金額(U)", "目前市值(U)", "損益金額(U)", "損益率(%)", "持倉佔比(%)"
-    ]].copy()
-    
-    display_df = display_df.sort_values("目前市值(U)", ascending=False).reset_index(drop=True)
-    display_df.index = display_df.index + 1
+# 這裡使用 st.dataframe 的 column_config 來達成「儀表板化」的效果
+# 我們將欄位整理成使用者要求的順序，並加上視覺化條圖
 
-    st.dataframe(
-        display_df.style.format({
-            "目前幣價": "{:.6f}",
-            "持有顆數": "{:,.2f}",
-            "平均成本(U)": "{:.6f}",
-            "投入金額(U)": "{:,.2f}",
-            "目前市值(U)": "{:,.2f}",
-            "損益金額(U)": "{:,.2f}",
-            "損益率(%)": "{:+.2f}%",
-            "持倉佔比(%)": "{:.1f}%"
-        }).applymap(color_pnl, subset=["損益率(%)", "損益金額(U)"]),
-        use_container_width=True
-    )
+# 整理顯示資料
+display_df = df_summary[[
+    "幣種", 
+    "投入金額(U)", "平均成本(U)", "持有顆數", "投入佔比", # 投入面
+    "目前市值(U)", "目前幣價", "市值佔比", # 現值面
+    "損益率", "損益金額(U)" # 損益面
+]].copy()
 
-with tab2:
-    st.subheader("🧾 購買清單與合計")
-    
-    if "幣種" in df_tx.columns:
-        all_coins = ["全部"] + sorted(df_tx["幣種"].astype(str).unique().tolist())
-        selected_coin = st.selectbox("🔍 篩選幣種", all_coins)
+# 依照市值排序
+display_df = display_df.sort_values("目前市值(U)", ascending=False).reset_index(drop=True)
+display_df.index = display_df.index + 1
+
+st.dataframe(
+    display_df,
+    use_container_width=True,
+    column_config={
+        "幣種": st.column_config.TextColumn("幣種", width="small"),
         
-        if selected_coin == "全部":
-            filtered_tx = df_tx.copy()
-        else:
-            filtered_tx = df_tx[df_tx["幣種"] == selected_coin].copy()
+        # --- 投入面 (Req 2) ---
+        "投入金額(U)": st.column_config.NumberColumn(
+            "總投入資金 (U)", format="$%.2f"
+        ),
+        "平均成本(U)": st.column_config.NumberColumn(
+            "投入均價", format="%.6f"
+        ),
+        "持有顆數": st.column_config.NumberColumn(
+            "持有顆數", format="%.2f"
+        ),
+        "投入佔比": st.column_config.ProgressColumn(
+            "資金佔比 (Cost %)", 
+            format="%.1f%%", 
+            min_value=0, max_value=1,
+            help="這個幣佔了你總投入本金的多少百分比"
+        ),
 
-        filtered_tx.index = filtered_tx.index + 1
-        st.dataframe(
-            filtered_tx.style.format({
-                "投入金額(U)": "{:,.2f}",
-                "持有顆數": "{:,.2f}",
-                "購入單價": "{:.6f}"
-            }),
-            use_container_width=True
+        # --- 現值與損益面 (Req 3) ---
+        "目前市值(U)": st.column_config.NumberColumn(
+            "目前市值 (U)", format="$%.2f"
+        ),
+        "目前幣價": st.column_config.NumberColumn(
+            "現價", format="%.6f"
+        ),
+        "市值佔比": st.column_config.ProgressColumn(
+            "持倉佔比 (Market %)", 
+            format="%.1f%%", 
+            min_value=0, max_value=1,
+            help="這個幣的市值佔你總資產的多少百分比"
+        ),
+        "損益率": st.column_config.NumberColumn(
+            "損益率 (%)", 
+            format="%.2f%%"
+        ),
+        "損益金額(U)": st.column_config.NumberColumn(
+            "損益金額 (U)", format="$%.2f"
         )
-        
-        if selected_coin != "全部" and not df_summary.empty:
-            if selected_coin in df_summary["幣種"].values:
-                coin_sum = df_summary[df_summary["幣種"] == selected_coin].iloc[0]
-                st.markdown(f"**👉 {selected_coin} 合計：**")
-                col1, col2, col3, col4 = st.columns(4)
-                col1.metric("總投入", f"${coin_sum['投入金額(U)']:,.2f}")
-                col2.metric("總顆數", f"{coin_sum['持有顆數']:,.2f}")
-                col3.metric("平均成本", f"${coin_sum['平均成本(U)']:,.6f}")
-                col4.metric("目前損益", f"${coin_sum['損益金額(U)']:,.2f}", delta=f"{coin_sum['損益率(%)']:.2f}%")
+    }
+)
+
+# 為了讓損益率有顏色，我們還是需要 style (但這次只針對 dataframe 的值做簡單處理，避免複雜圖表)
+# 如果想要更進階的「紅綠燈條」，Streamlit 目前原生的 dataframe 支援度有限，
+# 但上面的 ProgressColumn 已經很有儀表板的感覺了。
