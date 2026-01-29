@@ -1,135 +1,95 @@
 import streamlit as st
-from streamlit_gsheets import GSheetsConnection
 import pandas as pd
 import requests
-import time
+from datetime import datetime
 
 # --- 網頁設定 ---
-st.set_page_config(page_title="雲端資產管理系統", layout="wide", page_icon="☁️")
-st.title("☁️ Crypto 資產管理系統 (Google Sheets 連動版)")
+st.set_page_config(page_title="資產管理系統-唯讀版", layout="wide", page_icon="📈")
+st.title("📈 Crypto 資產管理系統 (唯讀同步版)")
 
 # ==========================================
-# ⚠️ 請在下方引號內，貼上你的 Google 試算表網址 ⚠️
+# ⚠️ 請在此處填入你「發佈到網路」的 CSV 網址 ⚠️
 # ==========================================
-sheet_url = "https://docs.google.com/spreadsheets/d/https://docs.google.com/spreadsheets/d/1PoE-eQHnp1m5EwG7eVc14fvrSNSXdwNxdB8LEnhsQoE/edit"
+# 提示：如果你發佈的是全文件，這裡填寫該網址。
+# 如果你有兩個分頁，最保險是分別發佈 loans 頁和 crypto 頁，並把網址貼在下面。
+LOAN_CSV_URL = "你的_loans_分頁CSV網址"
+CRYPTO_CSV_URL = "你的_crypto_分頁CSV網址"
 
-# 如果你忘了貼，這裡會提醒你
-if "你的網址貼在這裡" in sheet_url:
-    st.error("🚨 請打開 app.py，在第 14 行貼上你的 Google 試算表網址！")
-    st.stop()
-
-# --- 建立 Google Sheets 連線 ---
-conn = st.connection("gsheets", type=GSheetsConnection)
-
-# --- 定義分頁位置 ---
-SHEET_IDX_LOANS = 0  
-SHEET_IDX_CRYPTO = 1
-
-# --- 1. 讀取資料函式 ---
-def load_data():
+# --- 讀取資料函式 ---
+def load_data_from_url(url):
     try:
-        # 我們直接把 sheet_url 傳進去，不透過 secrets，這樣最準
-        df_loan = conn.read(spreadsheet=sheet_url, worksheet=SHEET_IDX_LOANS, ttl=0)
-        df_crypto = conn.read(spreadsheet=sheet_url, worksheet=SHEET_IDX_CRYPTO, ttl=0)
-        
-        # 簡單的錯誤防護
-        if df_loan is None: df_loan = pd.DataFrame()
-        if df_crypto is None: df_crypto = pd.DataFrame()
-        
-        return df_loan, df_crypto
+        # 加上隨機參數避免瀏覽器快取舊資料
+        cache_buster = f"?v={datetime.now().timestamp()}"
+        df = pd.read_csv(url + cache_buster)
+        return df
     except Exception as e:
-        st.error(f"❌ 讀取失敗！請確認網址是否正確。錯誤訊息: {e}")
-        return pd.DataFrame(), pd.DataFrame()
+        st.error(f"讀取失敗，請檢查網址或發佈設定。")
+        return pd.DataFrame()
 
-# --- 2. 儲存資料函式 ---
-def save_data(df, sheet_index):
-    try:
-        # 嘗試寫入
-        conn.update(spreadsheet=sheet_url, worksheet=sheet_index, data=df)
-        st.toast("✅ 資料已同步！")
-        time.sleep(1)
-    except Exception as e:
-        st.error(f"❌ 存檔失敗 (可能是權限問題): {e}")
-        st.info("💡 如果讀取成功但存檔失敗，通常是因為缺少 Service Account。目前請先確認讀取是否正常。")
-
-# --- 3. 抓取 CoinGecko 幣價 ---
-def get_coingecko_prices(symbols):
-    mapping = {
-        "$ADA": "cardano", "$Night": "night-verse", "$SNEK": "snek", 
-        "$USDT": "tether", "$BTC": "bitcoin", "$ETH": "ethereum", "$SOL": "solana"
-    }
+# --- 抓取 CoinGecko 幣價 ---
+def get_live_prices(symbols):
+    mapping = {"$ADA": "cardano", "$Night": "night-verse", "$SNEK": "snek"}
     ids = [mapping.get(s) for s in symbols if mapping.get(s)]
     if not ids: return {}
-    
     url = f"https://api.coingecko.com/api/v3/simple/price?ids={','.join(ids)}&vs_currencies=usd"
     try:
-        response = requests.get(url, timeout=10)
-        return response.json() if response.status_code == 200 else {}
+        res = requests.get(url, timeout=10).json()
+        return {s: res[mapping[s]]['usd'] for s in symbols if mapping.get(s) in res}
     except:
         return {}
 
-# ==========================================
-# 主畫面邏輯
-# ==========================================
-
 # 1. 載入資料
-df_loan, df_crypto = load_data()
+df_loan = load_data_from_url(LOAN_CSV_URL)
+df_crypto = load_data_from_url(CRYPTO_CSV_URL)
 
-# 停止條件
 if df_loan.empty or df_crypto.empty:
-    st.warning("⚠️ 無法讀取資料，請檢查網址。")
+    st.warning("🔄 正在等待 Google 試算表發佈數據... 請確保網址正確並已發佈為 CSV。")
+    st.info("💡 提醒：請在 Google 試算表執行「檔案 > 共用 > 發佈到網路」，選擇分頁並選「CSV」格式。")
     st.stop()
 
-# 2. 側邊欄
+# 2. 側邊欄：即時報價
 with st.sidebar:
-    st.header("⚙️ 控制台")
-    if st.button("🔄 更新幣價"):
-        with st.spinner("更新中..."):
-            price_map = get_coingecko_prices(df_crypto["幣種"].tolist())
-            mapping = {"$ADA": "cardano", "$Night": "night-verse", "$SNEK": "snek", "$USDT": "tether"}
-            
-            updated_count = 0
-            for index, row in df_crypto.iterrows():
-                cid = mapping.get(row['幣種'])
-                if cid and cid in price_map:
-                    df_crypto.at[index, '當前市價(U)'] = price_map[cid]['usd']
-                    updated_count += 1
-            
-            if updated_count > 0:
-                save_data(df_crypto, SHEET_IDX_CRYPTO)
-                st.success("更新完成！")
-                st.rerun()
-
-# 3. 顯示看板
-st.subheader("📊 資產看板")
-try:
-    total_pool = df_loan.iloc[0, df_loan.columns.get_loc("總資金(USDT)")] if "總資金(USDT)" in df_loan.columns else 0
+    st.header("⚡ 即時報價")
+    if st.button("🔄 刷新最新幣價"):
+        st.rerun()
     
-    # 轉型計算
+    prices = get_live_prices(df_crypto["幣種"].tolist())
+    for coin, p in prices.items():
+        st.write(f"{coin}: **${p}**")
+
+# 3. 數據計算 (連動邏輯)
+try:
+    # 資金池 (抓取第一行)
+    total_pool = df_loan["總資金(USDT)"].iloc[0]
+    
+    # 轉換數字格式
     for col in ["持有顆數", "平均成本(U)", "當前市價(U)"]:
         df_crypto[col] = pd.to_numeric(df_crypto[col], errors='coerce').fillna(0)
-    
+
+    # 如果有抓到即時價，就替換掉原本的市價
+    for i, row in df_crypto.iterrows():
+        if row['幣種'] in prices:
+            df_crypto.at[i, '當前市價(U)'] = prices[row['幣種']]
+
     invested = (df_crypto["持有顆數"] * df_crypto["平均成本(U)"]).sum()
     remaining = total_pool - invested
     market_val = (df_crypto["持有顆數"] * df_crypto["當前市價(U)"]).sum()
     pnl = market_val - invested
-    
+
+    # 顯示看板
     c1, c2, c3 = st.columns(3)
-    c1.metric("總資金池", f"${total_pool:,.2f}")
-    c2.metric("已投入", f"${invested:,.2f}")
-    c3.metric("剩餘子彈", f"${remaining:,.2f}")
-    
+    c1.metric("總資金池 (USDT)", f"${total_pool:,.2f}")
+    c2.metric("已投入成本 (USDT)", f"${invested:,.2f}")
+    c3.metric("剩餘子彈 (USDT)", f"${remaining:,.2f}", delta=f"{remaining:,.2f}")
+
     st.markdown("---")
+    
     c4, c5 = st.columns(2)
-    c4.metric("目前市值", f"${market_val:,.2f}")
-    c5.metric("總損益", f"${pnl:,.2f}", delta=f"{pnl:,.2f}")
+    c4.metric("持倉總市值 (USDT)", f"${market_val:,.2f}")
+    c5.metric("未實現總損益 (USDT)", f"${pnl:,.2f}", delta=f"{pnl:,.2f}")
+
+    st.subheader("📋 詳細持倉清單")
+    st.dataframe(df_crypto, use_container_width=True)
 
 except Exception as e:
-    st.error(f"數據計算錯誤: {e}")
-
-# 4. 編輯區
-st.subheader("📝 持倉編輯")
-edited = st.data_editor(df_crypto, num_rows="dynamic", use_container_width=True)
-if st.button("💾 儲存修改"):
-    save_data(edited, SHEET_IDX_CRYPTO)
-    st.rerun()
+    st.error(f"數據解析錯誤，請確保 Excel 標題正確。")
