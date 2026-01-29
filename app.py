@@ -3,6 +3,7 @@ import pandas as pd
 import requests
 import time
 import re
+import altair as alt # 引入繪圖套件
 from io import BytesIO
 
 # --- 網頁設定 ---
@@ -166,11 +167,9 @@ if not all(col in df_tx.columns for col in ["幣種", "投入金額(U)", "持有
     st.error("❌ 交易表缺少必要欄位 (幣種, 投入金額(U), 持有顆數)")
     st.stop()
 
-# --- 側邊欄控制台 (包含手動輸入邏輯) ---
+# --- 側邊欄控制台 ---
 with st.sidebar:
     st.header("⚙️ 控制台")
-    
-    # 模式切換開關
     manual_mode = st.toggle("🛠️ 啟用手動輸入幣價", value=False, help="當 API 無法抓到價格時，開啟此選項自行輸入價格")
     
     unique_coins = df_tx["幣種"].unique().tolist()
@@ -180,19 +179,12 @@ with st.sidebar:
 
     if manual_mode:
         st.info("💡 請在下方表格輸入目前幣價 (USDT)")
-        
-        # 建立一個預設的 DataFrame 供編輯
-        # 嘗試先抓一次價格當作預設值，抓不到就補 0
         api_prices = get_live_prices_auto(unique_coins)
-        
         edit_data = []
         for coin in unique_coins:
             default_price = api_prices.get(coin, 0.0)
             edit_data.append({"幣種": coin, "自訂價格": default_price})
-            
         edit_df = pd.DataFrame(edit_data)
-        
-        # 顯示可編輯表格
         edited_df = st.data_editor(
             edit_df,
             hide_index=True,
@@ -201,12 +193,8 @@ with st.sidebar:
                 "自訂價格": st.column_config.NumberColumn("價格 (U)", format="%.6f", min_value=0.0)
             }
         )
-        
-        # 將編輯後的結果轉回字典格式
         current_prices = dict(zip(edited_df["幣種"], edited_df["自訂價格"]))
-        
     else:
-        # 自動模式
         if st.button("🔄 強制刷新 API 價格"):
             find_coin_id.clear()
             get_live_prices_auto.clear() 
@@ -214,18 +202,11 @@ with st.sidebar:
             st.rerun()
             
         current_prices = get_live_prices_auto(unique_coins)
-        
         if not current_prices:
             st.warning("⚠️ API 忙線中，價格顯示為 0。可切換上方開關改為手動輸入。")
         else:
             st.success("✅ API 連線正常")
-            
         st.caption(f"上次更新: {time.strftime('%H:%M:%S')}")
-
-    # 顯示目前使用的價格 (除錯用)
-    with st.expander("查看目前採用價格"):
-        for coin, p in current_prices.items():
-            st.write(f"**{coin}**: ${p}")
 
 # --- 核心計算 ---
 clean_tx = df_tx[df_tx["幣種"].isin(unique_coins)].copy()
@@ -235,7 +216,6 @@ df_summary = clean_tx.groupby("幣種").agg({
 }).reset_index()
 
 df_summary["平均成本(U)"] = df_summary.apply(lambda x: x["投入金額(U)"] / x["持有顆數"] if x["持有顆數"] > 0 else 0, axis=1)
-# 這裡會使用 current_prices (無論是來自 API 還是手動輸入)
 df_summary["目前幣價"] = df_summary["幣種"].map(current_prices).fillna(0)
 df_summary["目前市值(U)"] = df_summary["持有顆數"] * df_summary["目前幣價"]
 df_summary["損益金額(U)"] = df_summary["目前市值(U)"] - df_summary["投入金額(U)"]
@@ -264,7 +244,6 @@ st.markdown("---")
 st.subheader("📈 總持倉績效")
 total_pnl = df_summary["損益金額(U)"].sum()
 total_roi = (total_pnl / total_invested_in_coins * 100) if total_invested_in_coins > 0 else 0
-
 twd_pnl = total_pnl * avg_exchange_rate
 twd_val = total_portfolio_value * avg_exchange_rate
 
@@ -275,8 +254,74 @@ m3.metric("總損益率 (ROI)", f"{total_roi:.2f}%")
 
 st.markdown("---")
 
-# --- 第三區：幣種詳細分析 ---
-st.subheader("📊 幣種詳細分析")
+# --- 第三區：圖表分析 (新增功能) ---
+st.subheader("📊 資產分佈與損益分析")
+
+# 準備圓餅圖數據
+pie_data = df_summary[df_summary["投入金額(U)"] > 0].copy()
+
+# 圓餅圖 1：投入資金佔比
+pie_cost = alt.Chart(pie_data).mark_arc(innerRadius=50, outerRadius=120).encode(
+    theta=alt.Theta("投入金額(U)", stack=True),
+    color=alt.Color("幣種", legend=alt.Legend(title="幣種")),
+    order=alt.Order("投入金額(U)", sort="descending"),
+    tooltip=["幣種", alt.Tooltip("投入金額(U)", format=",.2f"), alt.Tooltip("投入佔比", format=".1f", title="佔比(%)")]
+).properties(title="🟠 總投入資金佔比 (Cost)")
+
+# 圓餅圖 2：目前市值佔比
+pie_market = alt.Chart(pie_data).mark_arc(innerRadius=50, outerRadius=120).encode(
+    theta=alt.Theta("目前市值(U)", stack=True),
+    color=alt.Color("幣種", legend=alt.Legend(title="幣種")),
+    order=alt.Order("目前市值(U)", sort="descending"),
+    tooltip=["幣種", alt.Tooltip("目前市值(U)", format=",.2f"), alt.Tooltip("市值佔比", format=".1f", title="佔比(%)")]
+).properties(title="🔵 目前市值持倉佔比 (Market)")
+
+# 顯示圓餅圖
+col_pie1, col_pie2 = st.columns(2)
+with col_pie1:
+    st.altair_chart(pie_cost, use_container_width=True)
+with col_pie2:
+    st.altair_chart(pie_market, use_container_width=True)
+
+# 直方圖：損益分析
+st.markdown("#### 🔻 損益分析 (PnL)")
+bar_data = df_summary.copy()
+
+# 直方圖 1：損益金額
+bar_amt = alt.Chart(bar_data).mark_bar().encode(
+    x=alt.X("幣種", sort="-y"),
+    y=alt.Y("損益金額(U)", title="損益金額 (U)"),
+    color=alt.condition(
+        alt.datum['損益金額(U)'] > 0,
+        alt.value("#28a745"),  # 綠色
+        alt.value("#dc3545")   # 紅色
+    ),
+    tooltip=["幣種", alt.Tooltip("損益金額(U)", format=",.2f")]
+).properties(title="💵 各幣種損益金額 (Amount)")
+
+# 直方圖 2：損益率
+bar_pct = alt.Chart(bar_data).mark_bar().encode(
+    x=alt.X("幣種", sort="-y"),
+    y=alt.Y("損益率", title="損益率 (%)"),
+    color=alt.condition(
+        alt.datum['損益率'] > 0,
+        alt.value("#28a745"),  # 綠色
+        alt.value("#dc3545")   # 紅色
+    ),
+    tooltip=["幣種", alt.Tooltip("損益率", format=".2f", title="損益率(%)")]
+).properties(title="📈 各幣種損益率 (ROI %)")
+
+# 顯示直方圖
+col_bar1, col_bar2 = st.columns(2)
+with col_bar1:
+    st.altair_chart(bar_amt, use_container_width=True)
+with col_bar2:
+    st.altair_chart(bar_pct, use_container_width=True)
+
+st.markdown("---")
+
+# --- 第四區：幣種詳細分析表格 ---
+st.subheader("📋 詳細數據清單")
 
 display_df = df_summary[[
     "幣種", 
