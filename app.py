@@ -11,7 +11,7 @@ st.title("☁️ Crypto 資產管理系統 (Google Sheets 連動版)")
 # ==========================================
 # ⚠️ 請在下方引號內，貼上你的 Google 試算表網址 ⚠️
 # ==========================================
-sheet_url = "https://docs.google.com/spreadsheets/d/https://docs.google.com/spreadsheets/d/1PoE-eQHnp1m5EwG7eVc14fvrSNSXdwNxdB8LEnhsQoE/edit?usp=sharing/edit"
+sheet_url = "https://docs.google.com/spreadsheets/d/https://docs.google.com/spreadsheets/d/1PoE-eQHnp1m5EwG7eVc14fvrSNSXdwNxdB8LEnhsQoE/edit"
 
 # 如果你忘了貼，這裡會提醒你
 if "你的網址貼在這裡" in sheet_url:
