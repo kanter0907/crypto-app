@@ -3,7 +3,7 @@ import pandas as pd
 import requests
 import time
 import re
-import altair as alt # 引入繪圖套件
+import altair as alt
 from io import BytesIO
 
 # --- 網頁設定 ---
@@ -146,16 +146,258 @@ def get_live_prices_auto(symbols):
 # 主程式邏輯
 # ==========================================
 
+# 1. 讀取資料
 df_usdt = load_google_sheet(USDT_SHEET_URL, sheet_type="usdt")
 df_tx = load_google_sheet(TX_SHEET_URL, sheet_type="tx")
 
-if df_usdt.empty or df_tx.empty:
+# 2. 【關鍵修復】預先初始化變數，防止 NameError
+avg_exchange_rate = 32.5  # 預設匯率
+total_twd_in = 0
+total_usdt_got = 0
+
+# 3. 檢查資料並計算匯率
+if not df_usdt.empty:
+    try:
+        total_twd_in = df_usdt["投入台幣"].sum()
+        total_usdt_got = df_usdt["買入USDT"].sum()
+        
+        if total_usdt_got > 0:
+            avg_exchange_rate = total_twd_in / total_usdt_got
+    except Exception:
+        pass # 若計算失敗，維持預設值
+
+# 若兩張表都沒讀到，才停止
+if df_usdt.empty and df_tx.empty:
     st.warning("⚠️ 等待資料讀取中... 請確認兩個分頁的網址都已填入。")
     st.stop()
 
-# 計算匯率
-total_twd_in = df_usdt["投入台幣"].sum()
-total_usdt_got = df_usdt["買入USDT"].sum()
+# 4. 檢查交易表欄位
+if not df_tx.empty:
+    if not all(col in df_tx.columns for col in ["幣種", "投入金額(U)", "持有顆數"]):
+        st.error("❌ 交易表缺少必要欄位 (幣種, 投入金額(U), 持有顆數)")
+        st.stop()
 
-if total_usdt_got > 0:
-    avg_exchange
+# --- 側邊欄控制台 ---
+with st.sidebar:
+    st.header("⚙️ 控制台")
+    manual_mode = st.toggle("🛠️ 啟用手動輸入幣價", value=False, help="當 API 無法抓到價格時，開啟此選項自行輸入價格")
+    
+    unique_coins = []
+    if not df_tx.empty:
+        unique_coins = df_tx["幣種"].unique().tolist()
+        unique_coins = [x for x in unique_coins if x != "nan" and x != "0"]
+    
+    current_prices = {}
+
+    if manual_mode:
+        st.info("💡 請在下方表格輸入目前幣價 (USDT)")
+        api_prices = get_live_prices_auto(unique_coins)
+        edit_data = []
+        for coin in unique_coins:
+            default_price = api_prices.get(coin, 0.0)
+            edit_data.append({"幣種": coin, "自訂價格": default_price})
+        edit_df = pd.DataFrame(edit_data)
+        edited_df = st.data_editor(
+            edit_df,
+            hide_index=True,
+            column_config={
+                "幣種": st.column_config.TextColumn("幣種", disabled=True),
+                "自訂價格": st.column_config.NumberColumn("價格 (U)", format="%.6f", min_value=0.0)
+            }
+        )
+        current_prices = dict(zip(edited_df["幣種"], edited_df["自訂價格"]))
+    else:
+        if st.button("🔄 強制刷新 API 價格"):
+            find_coin_id.clear()
+            get_live_prices_auto.clear() 
+            st.cache_data.clear()
+            st.rerun()
+            
+        current_prices = get_live_prices_auto(unique_coins)
+        if not current_prices:
+            st.warning("⚠️ API 忙線中，價格顯示為 0。可切換上方開關改為手動輸入。")
+        else:
+            st.success("✅ API 連線正常")
+        st.caption(f"上次更新: {time.strftime('%H:%M:%S')}")
+
+# --- 核心計算 ---
+if not df_tx.empty:
+    clean_tx = df_tx[df_tx["幣種"].isin(unique_coins)].copy()
+    df_summary = clean_tx.groupby("幣種").agg({
+        "投入金額(U)": "sum",
+        "持有顆數": "sum"
+    }).reset_index()
+
+    df_summary["平均成本(U)"] = df_summary.apply(lambda x: x["投入金額(U)"] / x["持有顆數"] if x["持有顆數"] > 0 else 0, axis=1)
+    df_summary["目前幣價"] = df_summary["幣種"].map(current_prices).fillna(0)
+    df_summary["目前市值(U)"] = df_summary["持有顆數"] * df_summary["目前幣價"]
+    df_summary["損益金額(U)"] = df_summary["目前市值(U)"] - df_summary["投入金額(U)"]
+    df_summary["損益率"] = df_summary.apply(lambda x: (x["損益金額(U)"] / x["投入金額(U)"] * 100) if x["投入金額(U)"] > 0 else 0, axis=1)
+
+    total_invested_in_coins = df_summary["投入金額(U)"].sum()
+    total_portfolio_value = df_summary["目前市值(U)"].sum()
+
+    df_summary["投入佔比"] = df_summary.apply(lambda x: (x["投入金額(U)"] / total_invested_in_coins * 100) if total_invested_in_coins > 0 else 0, axis=1)
+    df_summary["市值佔比"] = df_summary.apply(lambda x: (x["目前市值(U)"] / total_portfolio_value * 100) if total_portfolio_value > 0 else 0, axis=1)
+else:
+    # 若無交易資料，建立空 DataFrame 防止報錯
+    df_summary = pd.DataFrame()
+    total_invested_in_coins = 0
+    total_portfolio_value = 0
+
+# ==========================================
+# 視覺化顯示
+# ==========================================
+
+# --- 第一區：資金池 ---
+st.subheader("💰 資金池與動態匯率")
+col_a, col_b, col_c = st.columns(3)
+col_a.metric("🇹🇼 總投入台幣本金", f"${total_twd_in:,.0f}")
+col_b.metric("🇺🇸 總買入 USDT", f"${total_usdt_got:,.2f}")
+col_c.metric("💱 真實平均匯率", f"{avg_exchange_rate:.2f} TWD/U")
+
+st.markdown("---")
+
+# --- 第二區：總持倉績效 ---
+st.subheader("📈 總持倉績效")
+
+total_pnl = 0
+total_roi = 0
+if not df_summary.empty:
+    total_pnl = df_summary["損益金額(U)"].sum()
+    total_roi = (total_pnl / total_invested_in_coins * 100) if total_invested_in_coins > 0 else 0
+
+twd_pnl = total_pnl * avg_exchange_rate
+twd_val = total_portfolio_value * avg_exchange_rate
+
+m1, m2, m3 = st.columns(3)
+m1.metric("總市值估算", f"${total_portfolio_value:,.2f} U", delta=f"≈ {twd_val:,.0f} TWD")
+m2.metric("總損益金額", f"${total_pnl:,.2f} U", delta=f"≈ {twd_pnl:,.0f} TWD")
+m3.metric("總損益率 (ROI)", f"{total_roi:.2f}%")
+
+st.markdown("---")
+
+# --- 第三區：圖表分析 (Altair 優化版) ---
+st.subheader("📊 資產分佈與損益分析")
+
+if not df_summary.empty and total_invested_in_coins > 0:
+    pie_data = df_summary[df_summary["投入金額(U)"] > 0].copy()
+
+    # 1. 圓餅圖：投入資金佔比 (數值在內部)
+    base_pie = alt.Chart(pie_data).encode(theta=alt.Theta("投入金額(U)", stack=True))
+
+    pie_cost_arc = base_pie.mark_arc(innerRadius=40, outerRadius=120).encode(
+        color=alt.Color("幣種", scale=alt.Scale(scheme='category10'), legend=alt.Legend(title="幣種")),
+        order=alt.Order("投入金額(U)", sort="descending"),
+        tooltip=["幣種", alt.Tooltip("投入金額(U)", format=",.2f"), alt.Tooltip("投入佔比", format=".1f", title="佔比(%)")]
+    )
+
+    pie_cost_text = base_pie.mark_text(radius=80).encode(
+        text=alt.Text("投入佔比", format=".1f"),
+        order=alt.Order("投入金額(U)", sort="descending"),
+        color=alt.value("white") 
+    )
+    chart_cost = (pie_cost_arc + pie_cost_text).properties(title="🟠 投入資金佔比 (Cost %)")
+
+    # 2. 圓餅圖：市值佔比 (數值在內部)
+    base_pie_mkt = alt.Chart(pie_data).encode(theta=alt.Theta("目前市值(U)", stack=True))
+
+    pie_mkt_arc = base_pie_mkt.mark_arc(innerRadius=40, outerRadius=120).encode(
+        color=alt.Color("幣種", scale=alt.Scale(scheme='category10'), legend=None),
+        order=alt.Order("目前市值(U)", sort="descending"),
+        tooltip=["幣種", alt.Tooltip("目前市值(U)", format=",.2f"), alt.Tooltip("市值佔比", format=".1f", title="佔比(%)")]
+    )
+
+    pie_mkt_text = base_pie_mkt.mark_text(radius=80).encode(
+        text=alt.Text("市值佔比", format=".1f"),
+        order=alt.Order("目前市值(U)", sort="descending"),
+        color=alt.value("white")
+    )
+    chart_mkt = (pie_mkt_arc + pie_mkt_text).properties(title="🔵 市值持倉佔比 (Market %)")
+
+    col_pie1, col_pie2 = st.columns(2)
+    with col_pie1:
+        st.altair_chart(chart_cost, use_container_width=True)
+    with col_pie2:
+        st.altair_chart(chart_mkt, use_container_width=True)
+
+    # 3. 直方圖 (拆分標籤，防止 TypeError)
+    st.markdown("#### 🔻 損益分析 (PnL)")
+    bar_data = df_summary.copy()
+
+    # A. 損益金額
+    base_bar_amt = alt.Chart(bar_data).encode(x=alt.X("幣種", sort="-y"))
+    bar_amt = base_bar_amt.mark_bar().encode(
+        y=alt.Y("損益金額(U)", title="損益金額 (U)"),
+        color=alt.condition(alt.datum['損益金額(U)'] > 0, alt.value("#28a745"), alt.value("#dc3545")),
+        tooltip=["幣種", alt.Tooltip("損益金額(U)", format=",.2f")]
+    )
+    # 正數標籤
+    text_amt_pos = base_bar_amt.mark_text(align='center', baseline='top', dy=5).encode(
+        y="損益金額(U)", text=alt.Text("損益金額(U)", format=",.0f"), color=alt.value("white")
+    ).transform_filter(alt.datum['損益金額(U)'] >= 0)
+    # 負數標籤
+    text_amt_neg = base_bar_amt.mark_text(align='center', baseline='bottom', dy=-5).encode(
+        y="損益金額(U)", text=alt.Text("損益金額(U)", format=",.0f"), color=alt.value("white")
+    ).transform_filter(alt.datum['損益金額(U)'] < 0)
+    
+    chart_amt = (bar_amt + text_amt_pos + text_amt_neg).properties(title="💵 各幣種損益金額 (Amount)")
+
+    # B. 損益率
+    base_bar_pct = alt.Chart(bar_data).encode(x=alt.X("幣種", sort="-y"))
+    bar_pct = base_bar_pct.mark_bar().encode(
+        y=alt.Y("損益率", title="損益率 (%)"),
+        color=alt.condition(alt.datum['損益率'] > 0, alt.value("#28a745"), alt.value("#dc3545")),
+        tooltip=["幣種", alt.Tooltip("損益率", format=".2f", title="損益率(%)")]
+    )
+    # 正數標籤
+    text_pct_pos = base_bar_pct.mark_text(align='center', baseline='top', dy=5).encode(
+        y="損益率", text=alt.Text("損益率", format=".1f"), color=alt.value("white")
+    ).transform_filter(alt.datum['損益率'] >= 0)
+    # 負數標籤
+    text_pct_neg = base_bar_pct.mark_text(align='center', baseline='bottom', dy=-5).encode(
+        y="損益率", text=alt.Text("損益率", format=".1f"), color=alt.value("white")
+    ).transform_filter(alt.datum['損益率'] < 0)
+
+    chart_pct = (bar_pct + text_pct_pos + text_pct_neg).properties(title="📈 各幣種損益率 (ROI %)")
+
+    col_bar1, col_bar2 = st.columns(2)
+    with col_bar1:
+        st.altair_chart(chart_amt, use_container_width=True)
+    with col_bar2:
+        st.altair_chart(chart_pct, use_container_width=True)
+else:
+    st.info("尚無交易資料，無法顯示圖表。")
+
+st.markdown("---")
+
+# --- 第四區：幣種詳細分析表格 ---
+st.subheader("📋 詳細數據清單")
+
+if not df_summary.empty:
+    display_df = df_summary[[
+        "幣種", 
+        "投入金額(U)", "平均成本(U)", "持有顆數", "投入佔比", 
+        "目前市值(U)", "目前幣價", "市值佔比", 
+        "損益率", "損益金額(U)"
+    ]].copy()
+
+    display_df = display_df.sort_values("目前市值(U)", ascending=False).reset_index(drop=True)
+    display_df.index = display_df.index + 1
+
+    st.dataframe(
+        display_df,
+        use_container_width=True,
+        column_config={
+            "幣種": st.column_config.TextColumn("幣種", width="small"),
+            "投入金額(U)": st.column_config.NumberColumn("總投入資金 (U)", format="$%.2f"),
+            "平均成本(U)": st.column_config.NumberColumn("投入均價", format="%.6f"),
+            "持有顆數": st.column_config.NumberColumn("持有顆數", format="%.2f"),
+            "投入佔比": st.column_config.ProgressColumn("資金佔比", format="%.1f%%", min_value=0, max_value=100),
+            "目前市值(U)": st.column_config.NumberColumn("目前市值 (U)", format="$%.2f"),
+            "目前幣價": st.column_config.NumberColumn("現價", format="%.6f"),
+            "市值佔比": st.column_config.ProgressColumn("持倉佔比", format="%.1f%%", min_value=0, max_value=100),
+            "損益率": st.column_config.NumberColumn("損益率 (%)", format="%.2f%%"),
+            "損益金額(U)": st.column_config.NumberColumn("損益金額 (U)", format="$%.2f")
+        }
+    )
