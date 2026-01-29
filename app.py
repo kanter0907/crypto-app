@@ -254,42 +254,72 @@ m3.metric("總損益率 (ROI)", f"{total_roi:.2f}%")
 
 st.markdown("---")
 
-# --- 第三區：圖表分析 (新增功能) ---
+# --- 第三區：圖表分析 (優化視覺版) ---
 st.subheader("📊 資產分佈與損益分析")
 
-# 準備圓餅圖數據
 pie_data = df_summary[df_summary["投入金額(U)"] > 0].copy()
 
-# 圓餅圖 1：投入資金佔比
-pie_cost = alt.Chart(pie_data).mark_arc(innerRadius=50, outerRadius=120).encode(
-    theta=alt.Theta("投入金額(U)", stack=True),
-    color=alt.Color("幣種", legend=alt.Legend(title="幣種")),
+# ================================
+# 1. 優化圓餅圖：鮮豔顏色 + 數據標籤
+# ================================
+
+# 設定圓餅圖的基礎 (Base Chart)
+base_pie = alt.Chart(pie_data).encode(
+    theta=alt.Theta("投入金額(U)", stack=True)
+)
+
+# A. 圓餅圖：投入資金佔比
+pie_cost_arc = base_pie.mark_arc(innerRadius=60, outerRadius=120).encode(
+    color=alt.Color("幣種", scale=alt.Scale(scheme='category10'), legend=alt.Legend(title="幣種")), # 使用高對比顏色
     order=alt.Order("投入金額(U)", sort="descending"),
     tooltip=["幣種", alt.Tooltip("投入金額(U)", format=",.2f"), alt.Tooltip("投入佔比", format=".1f", title="佔比(%)")]
-).properties(title="🟠 總投入資金佔比 (Cost)")
+)
 
-# 圓餅圖 2：目前市值佔比
-pie_market = alt.Chart(pie_data).mark_arc(innerRadius=50, outerRadius=120).encode(
-    theta=alt.Theta("目前市值(U)", stack=True),
-    color=alt.Color("幣種", legend=alt.Legend(title="幣種")),
+# A-2. 文字標籤 (顯示佔比)
+pie_cost_text = base_pie.mark_text(radius=140).encode(
+    text=alt.Text("投入佔比", format=".1f"),
+    order=alt.Order("投入金額(U)", sort="descending"),
+    color=alt.value("black") 
+)
+chart_cost = (pie_cost_arc + pie_cost_text).properties(title="🟠 投入資金佔比 (Cost %)")
+
+
+# B. 圓餅圖：市值佔比
+base_pie_mkt = alt.Chart(pie_data).encode(
+    theta=alt.Theta("目前市值(U)", stack=True)
+)
+
+pie_mkt_arc = base_pie_mkt.mark_arc(innerRadius=60, outerRadius=120).encode(
+    color=alt.Color("幣種", scale=alt.Scale(scheme='category10'), legend=None), # 隱藏圖例避免重複
     order=alt.Order("目前市值(U)", sort="descending"),
     tooltip=["幣種", alt.Tooltip("目前市值(U)", format=",.2f"), alt.Tooltip("市值佔比", format=".1f", title="佔比(%)")]
-).properties(title="🔵 目前市值持倉佔比 (Market)")
+)
+
+pie_mkt_text = base_pie_mkt.mark_text(radius=140).encode(
+    text=alt.Text("市值佔比", format=".1f"),
+    order=alt.Order("目前市值(U)", sort="descending"),
+    color=alt.value("black")
+)
+chart_mkt = (pie_mkt_arc + pie_mkt_text).properties(title="🔵 市值持倉佔比 (Market %)")
 
 # 顯示圓餅圖
 col_pie1, col_pie2 = st.columns(2)
 with col_pie1:
-    st.altair_chart(pie_cost, use_container_width=True)
+    st.altair_chart(chart_cost, use_container_width=True)
 with col_pie2:
-    st.altair_chart(pie_market, use_container_width=True)
+    st.altair_chart(chart_mkt, use_container_width=True)
 
-# 直方圖：損益分析
+
+# ================================
+# 2. 優化直方圖：數據標籤 (文字)
+# ================================
 st.markdown("#### 🔻 損益分析 (PnL)")
 bar_data = df_summary.copy()
 
-# 直方圖 1：損益金額
-bar_amt = alt.Chart(bar_data).mark_bar().encode(
-    x=alt.X("幣種", sort="-y"),
+# C. 直方圖：損益金額
+base_bar_amt = alt.Chart(bar_data).encode(x=alt.X("幣種", sort="-y"))
+
+bar_amt = base_bar_amt.mark_bar().encode(
     y=alt.Y("損益金額(U)", title="損益金額 (U)"),
     color=alt.condition(
         alt.datum['損益金額(U)'] > 0,
@@ -297,26 +327,56 @@ bar_amt = alt.Chart(bar_data).mark_bar().encode(
         alt.value("#dc3545")   # 紅色
     ),
     tooltip=["幣種", alt.Tooltip("損益金額(U)", format=",.2f")]
-).properties(title="💵 各幣種損益金額 (Amount)")
+)
 
-# 直方圖 2：損益率
-bar_pct = alt.Chart(bar_data).mark_bar().encode(
-    x=alt.X("幣種", sort="-y"),
+# 數值文字 (正數顯示在上方，負數顯示在下方)
+text_amt = base_bar_amt.mark_text(
+    align='center',
+    baseline='bottom',
+    dy=-5  # 預設向上偏移
+).encode(
+    y="損益金額(U)",
+    text=alt.Text("損益金額(U)", format=",.0f"),
+    # 動態調整位置：如果小於0，改為向下偏移
+    dy=alt.condition(alt.datum['損益金額(U)'] < 0, alt.value(15), alt.value(-5)),
+    color=alt.value("black")
+)
+
+chart_amt = (bar_amt + text_amt).properties(title="💵 各幣種損益金額 (Amount)")
+
+
+# D. 直方圖：損益率
+base_bar_pct = alt.Chart(bar_data).encode(x=alt.X("幣種", sort="-y"))
+
+bar_pct = base_bar_pct.mark_bar().encode(
     y=alt.Y("損益率", title="損益率 (%)"),
     color=alt.condition(
         alt.datum['損益率'] > 0,
-        alt.value("#28a745"),  # 綠色
-        alt.value("#dc3545")   # 紅色
+        alt.value("#28a745"),
+        alt.value("#dc3545")
     ),
     tooltip=["幣種", alt.Tooltip("損益率", format=".2f", title="損益率(%)")]
-).properties(title="📈 各幣種損益率 (ROI %)")
+)
+
+text_pct = base_bar_pct.mark_text(
+    align='center',
+    baseline='bottom',
+    dy=-5
+).encode(
+    y="損益率",
+    text=alt.Text("損益率", format=".1f"), # 顯示一位小數
+    dy=alt.condition(alt.datum['損益率'] < 0, alt.value(15), alt.value(-5)),
+    color=alt.value("black")
+)
+
+chart_pct = (bar_pct + text_pct).properties(title="📈 各幣種損益率 (ROI %)")
 
 # 顯示直方圖
 col_bar1, col_bar2 = st.columns(2)
 with col_bar1:
-    st.altair_chart(bar_amt, use_container_width=True)
+    st.altair_chart(chart_amt, use_container_width=True)
 with col_bar2:
-    st.altair_chart(bar_pct, use_container_width=True)
+    st.altair_chart(chart_pct, use_container_width=True)
 
 st.markdown("---")
 
