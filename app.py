@@ -83,7 +83,7 @@ def find_coin_id(symbol):
     search_url = f"https://api.coingecko.com/api/v3/search?query={clean_symbol}"
     headers = {"User-Agent": "Mozilla/5.0"} 
     try:
-        time.sleep(1) # 增加延遲，避免被擋
+        time.sleep(1) 
         res = requests.get(search_url, headers=headers, timeout=5).json()
         if "coins" in res and len(res["coins"]) > 0:
             return res["coins"][0]["id"]
@@ -91,7 +91,7 @@ def find_coin_id(symbol):
     except:
         return None
 
-# 3. 抓取幣價 (關鍵修正：增加快取 ttl=600 秒，避免一直刷新變 0)
+# 3. 抓取幣價 (快取 10 分鐘)
 @st.cache_data(ttl=600)
 def get_live_prices_auto(symbols):
     known_mapping = {
@@ -118,7 +118,6 @@ def get_live_prices_auto(symbols):
         else:
             unknown_symbols.append(s)
     
-    # 未知幣種自動搜尋
     for s in unknown_symbols:
         fid = find_coin_id(s)
         if fid: final_ids[s] = fid
@@ -130,9 +129,7 @@ def get_live_prices_auto(symbols):
     headers = {"User-Agent": "Mozilla/5.0"} 
     
     try:
-        # 增加 Timeout 避免卡住
         res = requests.get(url, headers=headers, timeout=10)
-        
         if res.status_code == 200:
             data = res.json()
             prices = {}
@@ -141,7 +138,7 @@ def get_live_prices_auto(symbols):
                     prices[sym] = data[cid]['usd']
             return prices
         elif res.status_code == 429:
-            st.toast("⚠️ API 請求過於頻繁 (429)，請稍後再試", icon="⏳")
+            st.toast("⚠️ API 請求過於頻繁，請稍後再試", icon="⏳")
             return {}
         else:
             return {}
@@ -176,7 +173,6 @@ if not all(col in df_tx.columns for col in ["幣種", "投入金額(U)", "持有
 with st.sidebar:
     st.header("⚙️ 控制台")
     if st.button("🔄 強制刷新價格"):
-        # 清除快取
         find_coin_id.clear()
         get_live_prices_auto.clear() 
         st.cache_data.clear()
@@ -185,11 +181,10 @@ with st.sidebar:
     unique_coins = df_tx["幣種"].unique().tolist()
     unique_coins = [x for x in unique_coins if x != "nan" and x != "0"]
     
-    # 抓取價格 (現在有快取保護)
     current_prices = get_live_prices_auto(unique_coins)
     
     if not current_prices:
-        st.error("⚠️ 無法獲取價格 (API 忙線中)，目前顯示為 0。請等待 1 分鐘後再試。")
+        st.error("⚠️ 無法獲取價格 (API 忙線中)，目前顯示為 0。")
     
     st.write("---")
     st.caption(f"上次更新: {time.strftime('%H:%M:%S')}")
@@ -205,16 +200,11 @@ df_summary["平均成本(U)"] = df_summary.apply(lambda x: x["投入金額(U)"] 
 df_summary["目前幣價"] = df_summary["幣種"].map(current_prices).fillna(0)
 df_summary["目前市值(U)"] = df_summary["持有顆數"] * df_summary["目前幣價"]
 df_summary["損益金額(U)"] = df_summary["目前市值(U)"] - df_summary["投入金額(U)"]
-
-# --- 修正：損益率計算 ---
-# 如果目前市值是 0 (API 沒抓到)，但投入金額 > 0，損益率應該是 -100%
-# 公式：(損益金額 / 投入金額) * 100
 df_summary["損益率"] = df_summary.apply(lambda x: (x["損益金額(U)"] / x["投入金額(U)"] * 100) if x["投入金額(U)"] > 0 else 0, axis=1)
 
 total_invested_in_coins = df_summary["投入金額(U)"].sum()
 total_portfolio_value = df_summary["目前市值(U)"].sum()
 
-# --- 修正：佔比計算 (乘 100) ---
 df_summary["投入佔比"] = df_summary.apply(lambda x: (x["投入金額(U)"] / total_invested_in_coins * 100) if total_invested_in_coins > 0 else 0, axis=1)
 df_summary["市值佔比"] = df_summary.apply(lambda x: (x["目前市值(U)"] / total_portfolio_value * 100) if total_portfolio_value > 0 else 0, axis=1)
 
@@ -222,19 +212,20 @@ df_summary["市值佔比"] = df_summary.apply(lambda x: (x["目前市值(U)"] / 
 # 視覺化顯示
 # ==========================================
 
-# --- 第一區：資金池 (修正：移除剩餘子彈) ---
+# --- 第一區：資金池 ---
 st.subheader("💰 資金池與動態匯率")
-col_a, col_b, col_c = st.columns(3) # 改為 3 欄
+col_a, col_b, col_c = st.columns(3)
 col_a.metric("🇹🇼 總投入台幣本金", f"${total_twd_in:,.0f}")
 col_b.metric("🇺🇸 總買入 USDT", f"${total_usdt_got:,.2f}")
-col_c.metric("💱 真實平均匯率", f"{avg_exchange_rate:.4f} TWD/U")
+
+# ✨ 修改處：改為顯示小數點第 2 位
+col_c.metric("💱 真實平均匯率", f"{avg_exchange_rate:.2f} TWD/U")
 
 st.markdown("---")
 
 # --- 第二區：總持倉績效 ---
 st.subheader("📈 總持倉績效")
 total_pnl = df_summary["損益金額(U)"].sum()
-# 總 ROI 也乘 100
 total_roi = (total_pnl / total_invested_in_coins * 100) if total_invested_in_coins > 0 else 0
 
 twd_pnl = total_pnl * avg_exchange_rate
@@ -243,7 +234,7 @@ twd_val = total_portfolio_value * avg_exchange_rate
 m1, m2, m3 = st.columns(3)
 m1.metric("總市值估算", f"${total_portfolio_value:,.2f} U", delta=f"≈ {twd_val:,.0f} TWD")
 m2.metric("總損益金額", f"${total_pnl:,.2f} U", delta=f"≈ {twd_pnl:,.0f} TWD")
-m3.metric("總損益率 (ROI)", f"{total_roi:.2f}%") # 這裡已經乘過 100 了，所以直接顯示 %
+m3.metric("總損益率 (ROI)", f"{total_roi:.2f}%")
 
 st.markdown("---")
 
@@ -285,8 +276,6 @@ st.dataframe(
             min_value=0, max_value=100,
         ),
         
-        # --- 修正：損益率顯示 ---
-        # 數據已經是 -100 了，這裡格式用 %.2f%% 就會顯示 -100.00%
         "損益率": st.column_config.NumberColumn(
             "損益率 (%)", 
             format="%.2f%%"
