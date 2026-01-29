@@ -12,8 +12,8 @@ st.title("📈 Crypto 資產管理系統 (唯讀同步版)")
 # ==========================================
 # 提示：如果你發佈的是全文件，這裡填寫該網址。
 # 如果你有兩個分頁，最保險是分別發佈 loans 頁和 crypto 頁，並把網址貼在下面。
-LOAN_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTa5SSqEEWRDVGAhj64fMzrY3Oxy-Fhkv9Buq9UYV2Fx2ZwZj0OU2i1-6I92-WgUKiRFlvU5meQyV-2/pub?gid=0&single=true&output=csv"
-CRYPTO_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTa5SSqEEWRDVGAhj64fMzrY3Oxy-Fhkv9Buq9UYV2Fx2ZwZj0OU2i1-6I92-WgUKiRFlvU5meQyV-2/pub?gid=0&single=true&output=csv"
+LOAN_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTa5SSqEEWRDVGAhj64fMzrY3Oxy-Fhkv9Buq9UYV2Fx2ZwZj0OU2i1-6I92-WgUKiRFlvU5meQyV-2/pub?output=csv"
+CRYPTO_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTa5SSqEEWRDVGAhj64fMzrY3Oxy-Fhkv9Buq9UYV2Fx2ZwZj0OU2i1-6I92-WgUKiRFlvU5meQyV-2/pub?output=csv"
 
 # --- 讀取資料函式 ---
 def load_data_from_url(url):
