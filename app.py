@@ -142,7 +142,7 @@ def get_live_prices_auto(symbols):
     except Exception:
         return {}
 
-# 4. 【關鍵修改】抓取 USDT/TWD 匯率 (改用 BitoPro API)
+# 4. 抓取 USDT/TWD 匯率 (改用 BitoPro API)
 @st.cache_data(ttl=600)
 def get_usdt_twd_rate():
     # 來源：BitoPro 台灣幣託交易所 (公開 API，穩定且準確)
@@ -166,7 +166,7 @@ def get_usdt_twd_rate():
 df_usdt = load_google_sheet(USDT_SHEET_URL, sheet_type="usdt")
 df_tx = load_google_sheet(TX_SHEET_URL, sheet_type="tx")
 
-# 2. 預先初始化變數
+# 2. 預先初始化變數 (防止 NameError)
 avg_exchange_rate = 32.5
 total_twd_in = 0
 total_usdt_got = 0
@@ -200,7 +200,7 @@ with st.sidebar:
     st.subheader("💱 匯率設定")
     fx_mode = st.radio(
         "選擇台幣換算匯率來源",
-        ["自動 (BitoPro)", "手動輸入", "使用平均成本匯率"], # 選項文字修改
+        ["自動 (BitoPro)", "手動輸入", "使用平均成本匯率"], 
         index=0,
         help="自動模式將從台灣 BitoPro 交易所抓取即時 USDT/TWD 價格"
     )
@@ -300,7 +300,7 @@ st.subheader("💰 資金池與動態匯率")
 col_a, col_b, col_c = st.columns(3)
 col_a.metric("🇹🇼 總投入台幣本金", f"${total_twd_in:,.0f}")
 col_b.metric("🇺🇸 總買入 USDT", f"${total_usdt_got:,.2f}")
-col_c.metric("💱 真實平均匯率", f"{avg_exchange_rate:.2f} TWD/U")
+col_c.metric("💱 平均買入成本匯率", f"{avg_exchange_rate:.2f} TWD/U", help="這是您投入資金的歷史平均匯率")
 
 st.markdown("---")
 
@@ -313,11 +313,11 @@ if not df_summary.empty:
     total_pnl_usdt = df_summary["損益金額(U)"].sum()
     total_roi = (total_pnl_usdt / total_invested_in_coins * 100) if total_invested_in_coins > 0 else 0
 
-# 計算台幣實際損益
+# 計算台幣實際損益 (市值*目前匯率 - 總投入本金)
 current_twd_value = total_portfolio_value * current_fx_rate
 net_twd_pnl = current_twd_value - total_twd_in 
 
-# 顯示用
+# 顯示用 (USDT損益換算)
 twd_pnl_display = total_pnl_usdt * current_fx_rate
 
 m1, m2, m3 = st.columns(3)
@@ -332,7 +332,7 @@ m1.metric(
 
 # 指標 2: 總損益金額
 m2.metric(
-    "總損益金額", 
+    "總損益金額 (U)", 
     f"${total_pnl_usdt:,.2f} U", 
     delta=f"{twd_pnl_display:,.0f} TWD (估算)",
     help="USDT 損益換算台幣"
@@ -343,7 +343,7 @@ m3.metric("總損益率 (ROI)", f"{total_roi:.2f}%")
 
 st.markdown("---")
 
-# --- 第三區：圖表分析 ---
+# --- 第三區：圖表分析 (Altair) ---
 st.subheader("📊 資產分佈與損益分析")
 
 if not df_summary.empty and total_invested_in_coins > 0:
