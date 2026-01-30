@@ -150,8 +150,8 @@ def get_live_prices_auto(symbols):
 df_usdt = load_google_sheet(USDT_SHEET_URL, sheet_type="usdt")
 df_tx = load_google_sheet(TX_SHEET_URL, sheet_type="tx")
 
-# 2. 【關鍵修復】預先初始化變數，防止 NameError
-avg_exchange_rate = 32.5  # 預設匯率
+# 2. 預先初始化變數
+avg_exchange_rate = 32.5
 total_twd_in = 0
 total_usdt_got = 0
 
@@ -164,9 +164,8 @@ if not df_usdt.empty:
         if total_usdt_got > 0:
             avg_exchange_rate = total_twd_in / total_usdt_got
     except Exception:
-        pass # 若計算失敗，維持預設值
+        pass
 
-# 若兩張表都沒讀到，才停止
 if df_usdt.empty and df_tx.empty:
     st.warning("⚠️ 等待資料讀取中... 請確認兩個分頁的網址都已填入。")
     st.stop()
@@ -240,7 +239,6 @@ if not df_tx.empty:
     df_summary["投入佔比"] = df_summary.apply(lambda x: (x["投入金額(U)"] / total_invested_in_coins * 100) if total_invested_in_coins > 0 else 0, axis=1)
     df_summary["市值佔比"] = df_summary.apply(lambda x: (x["目前市值(U)"] / total_portfolio_value * 100) if total_portfolio_value > 0 else 0, axis=1)
 else:
-    # 若無交易資料，建立空 DataFrame 防止報錯
     df_summary = pd.DataFrame()
     total_invested_in_coins = 0
     total_portfolio_value = 0
@@ -258,40 +256,61 @@ col_c.metric("💱 真實平均匯率", f"{avg_exchange_rate:.2f} TWD/U")
 
 st.markdown("---")
 
-# --- 第二區：總持倉績效 ---
+# --- 第二區：總持倉績效 (關鍵修正區) ---
 st.subheader("📈 總持倉績效")
 
-total_pnl = 0
+total_pnl_usdt = 0
 total_roi = 0
 if not df_summary.empty:
-    total_pnl = df_summary["損益金額(U)"].sum()
-    total_roi = (total_pnl / total_invested_in_coins * 100) if total_invested_in_coins > 0 else 0
+    total_pnl_usdt = df_summary["損益金額(U)"].sum()
+    total_roi = (total_pnl_usdt / total_invested_in_coins * 100) if total_invested_in_coins > 0 else 0
 
-twd_pnl = total_pnl * avg_exchange_rate
-twd_val = total_portfolio_value * avg_exchange_rate
+# 【關鍵計算修正】：計算台幣的實際損益
+# 公式：(目前市值 U * 平均匯率) - (總投入台幣本金)
+# 這樣如果本金 40 萬，現值 30 萬，結果就是 -10 萬，箭頭就會是紅色向下
+current_twd_value = total_portfolio_value * avg_exchange_rate
+net_twd_pnl = current_twd_value - total_twd_in 
+
+# 顯示用 (USDT 損益轉換台幣，僅供參考)
+twd_pnl_display = total_pnl_usdt * avg_exchange_rate
 
 m1, m2, m3 = st.columns(3)
-m1.metric("總市值估算", f"${total_portfolio_value:,.2f} U", delta=f"≈ {twd_val:,.0f} TWD")
-m2.metric("總損益金額", f"${total_pnl:,.2f} U", delta=f"≈ {twd_pnl:,.0f} TWD")
+
+# 指標 1: 總市值估算
+# Delta 改為「與總本金的台幣差額」，這樣虧損時就會顯示紅字向下
+m1.metric(
+    "總市值估算", 
+    f"${total_portfolio_value:,.2f} U", 
+    delta=f"{net_twd_pnl:,.0f} TWD (實際損益)"
+)
+st.caption(f"💡 目前約合 NT$ {current_twd_value:,.0f} (總投入 NT$ {total_twd_in:,.0f})")
+
+# 指標 2: 總損益金額
+# Delta 確保負號在最前面
+m2.metric(
+    "總損益金額", 
+    f"${total_pnl_usdt:,.2f} U", 
+    delta=f"{twd_pnl_display:,.0f} TWD (估算)"
+)
+
+# 指標 3: ROI
 m3.metric("總損益率 (ROI)", f"{total_roi:.2f}%")
 
 st.markdown("---")
 
-# --- 第三區：圖表分析 (Altair 優化版) ---
+# --- 第三區：圖表分析 (Altair) ---
 st.subheader("📊 資產分佈與損益分析")
 
 if not df_summary.empty and total_invested_in_coins > 0:
     pie_data = df_summary[df_summary["投入金額(U)"] > 0].copy()
 
-    # 1. 圓餅圖：投入資金佔比 (數值在內部)
+    # 1. 圓餅圖：投入資金佔比
     base_pie = alt.Chart(pie_data).encode(theta=alt.Theta("投入金額(U)", stack=True))
-
     pie_cost_arc = base_pie.mark_arc(innerRadius=40, outerRadius=120).encode(
         color=alt.Color("幣種", scale=alt.Scale(scheme='category10'), legend=alt.Legend(title="幣種")),
         order=alt.Order("投入金額(U)", sort="descending"),
         tooltip=["幣種", alt.Tooltip("投入金額(U)", format=",.2f"), alt.Tooltip("投入佔比", format=".1f", title="佔比(%)")]
     )
-
     pie_cost_text = base_pie.mark_text(radius=80).encode(
         text=alt.Text("投入佔比", format=".1f"),
         order=alt.Order("投入金額(U)", sort="descending"),
@@ -299,15 +318,13 @@ if not df_summary.empty and total_invested_in_coins > 0:
     )
     chart_cost = (pie_cost_arc + pie_cost_text).properties(title="🟠 投入資金佔比 (Cost %)")
 
-    # 2. 圓餅圖：市值佔比 (數值在內部)
+    # 2. 圓餅圖：市值佔比
     base_pie_mkt = alt.Chart(pie_data).encode(theta=alt.Theta("目前市值(U)", stack=True))
-
     pie_mkt_arc = base_pie_mkt.mark_arc(innerRadius=40, outerRadius=120).encode(
         color=alt.Color("幣種", scale=alt.Scale(scheme='category10'), legend=None),
         order=alt.Order("目前市值(U)", sort="descending"),
         tooltip=["幣種", alt.Tooltip("目前市值(U)", format=",.2f"), alt.Tooltip("市值佔比", format=".1f", title="佔比(%)")]
     )
-
     pie_mkt_text = base_pie_mkt.mark_text(radius=80).encode(
         text=alt.Text("市值佔比", format=".1f"),
         order=alt.Order("目前市值(U)", sort="descending"),
@@ -321,7 +338,7 @@ if not df_summary.empty and total_invested_in_coins > 0:
     with col_pie2:
         st.altair_chart(chart_mkt, use_container_width=True)
 
-    # 3. 直方圖 (拆分標籤，防止 TypeError)
+    # 3. 直方圖
     st.markdown("#### 🔻 損益分析 (PnL)")
     bar_data = df_summary.copy()
 
@@ -332,15 +349,12 @@ if not df_summary.empty and total_invested_in_coins > 0:
         color=alt.condition(alt.datum['損益金額(U)'] > 0, alt.value("#28a745"), alt.value("#dc3545")),
         tooltip=["幣種", alt.Tooltip("損益金額(U)", format=",.2f")]
     )
-    # 正數標籤
     text_amt_pos = base_bar_amt.mark_text(align='center', baseline='top', dy=5).encode(
         y="損益金額(U)", text=alt.Text("損益金額(U)", format=",.0f"), color=alt.value("white")
     ).transform_filter(alt.datum['損益金額(U)'] >= 0)
-    # 負數標籤
     text_amt_neg = base_bar_amt.mark_text(align='center', baseline='bottom', dy=-5).encode(
         y="損益金額(U)", text=alt.Text("損益金額(U)", format=",.0f"), color=alt.value("white")
     ).transform_filter(alt.datum['損益金額(U)'] < 0)
-    
     chart_amt = (bar_amt + text_amt_pos + text_amt_neg).properties(title="💵 各幣種損益金額 (Amount)")
 
     # B. 損益率
@@ -350,15 +364,12 @@ if not df_summary.empty and total_invested_in_coins > 0:
         color=alt.condition(alt.datum['損益率'] > 0, alt.value("#28a745"), alt.value("#dc3545")),
         tooltip=["幣種", alt.Tooltip("損益率", format=".2f", title="損益率(%)")]
     )
-    # 正數標籤
     text_pct_pos = base_bar_pct.mark_text(align='center', baseline='top', dy=5).encode(
         y="損益率", text=alt.Text("損益率", format=".1f"), color=alt.value("white")
     ).transform_filter(alt.datum['損益率'] >= 0)
-    # 負數標籤
     text_pct_neg = base_bar_pct.mark_text(align='center', baseline='bottom', dy=-5).encode(
         y="損益率", text=alt.Text("損益率", format=".1f"), color=alt.value("white")
     ).transform_filter(alt.datum['損益率'] < 0)
-
     chart_pct = (bar_pct + text_pct_pos + text_pct_neg).properties(title="📈 各幣種損益率 (ROI %)")
 
     col_bar1, col_bar2 = st.columns(2)
