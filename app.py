@@ -324,7 +324,7 @@ m1, m2, m3 = st.columns(3)
 m1.metric(
     "總市值估算", 
     f"${total_portfolio_value:,.2f} U", 
-    delta=f"{net_twd_pnl:,.0f} TWD (實際損益)",
+    delta=f"{net_twd_pnl:,.0f} TWD (實際損益-含匯差)",
     help=f"台幣估值使用匯率: {current_fx_rate:.2f}。計算方式：(總市值 x 匯率) - 總投入本金"
 )
 
@@ -333,7 +333,7 @@ m1.metric(
 m2.metric(
     "總損益金額 (U)", 
     f"${total_pnl_usdt:,.2f} U", 
-    delta=f"{net_twd_pnl:,.0f} TWD (實際損益)",
+    delta=f"{net_twd_pnl:,.0f} TWD (實際損益-含匯差)",
     help="USDT 損益已整合匯差，與左側台幣損益一致"
 )
 
