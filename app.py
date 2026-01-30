@@ -166,7 +166,7 @@ def get_usdt_twd_rate():
 df_usdt = load_google_sheet(USDT_SHEET_URL, sheet_type="usdt")
 df_tx = load_google_sheet(TX_SHEET_URL, sheet_type="tx")
 
-# 2. 預先初始化變數 (防止 NameError)
+# 2. 預先初始化變數
 avg_exchange_rate = 32.5
 total_twd_in = 0
 total_usdt_got = 0
@@ -313,12 +313,10 @@ if not df_summary.empty:
     total_pnl_usdt = df_summary["損益金額(U)"].sum()
     total_roi = (total_pnl_usdt / total_invested_in_coins * 100) if total_invested_in_coins > 0 else 0
 
-# 計算台幣實際損益 (市值*目前匯率 - 總投入本金)
+# 【關鍵計算：統一損益標準】
+# 計算真實台幣損益 = (目前市值U * 當下匯率) - (總投入台幣)
 current_twd_value = total_portfolio_value * current_fx_rate
 net_twd_pnl = current_twd_value - total_twd_in 
-
-# 顯示用 (USDT損益換算)
-twd_pnl_display = total_pnl_usdt * current_fx_rate
 
 m1, m2, m3 = st.columns(3)
 
@@ -327,15 +325,16 @@ m1.metric(
     "總市值估算", 
     f"${total_portfolio_value:,.2f} U", 
     delta=f"{net_twd_pnl:,.0f} TWD (實際損益)",
-    help=f"台幣估值使用匯率: {current_fx_rate:.2f}"
+    help=f"台幣估值使用匯率: {current_fx_rate:.2f}。計算方式：(總市值 x 匯率) - 總投入本金"
 )
 
 # 指標 2: 總損益金額
+# 這裡也改用 net_twd_pnl 來顯示，確保兩個數字一致，避免混淆
 m2.metric(
     "總損益金額 (U)", 
     f"${total_pnl_usdt:,.2f} U", 
-    delta=f"{twd_pnl_display:,.0f} TWD (估算)",
-    help="USDT 損益換算台幣"
+    delta=f"{net_twd_pnl:,.0f} TWD (實際損益)",
+    help="USDT 損益已整合匯差，與左側台幣損益一致"
 )
 
 # 指標 3: ROI
