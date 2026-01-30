@@ -142,6 +142,20 @@ def get_live_prices_auto(symbols):
     except Exception:
         return {}
 
+# 4. 抓取 USDT/TWD 匯率 (快取 10 分鐘)
+@st.cache_data(ttl=600)
+def get_usdt_twd_rate():
+    url = "https://api.coingecko.com/api/v3/simple/price?ids=tether&vs_currencies=twd"
+    headers = {"User-Agent": "Mozilla/5.0"} 
+    try:
+        res = requests.get(url, headers=headers, timeout=10)
+        if res.status_code == 200:
+            data = res.json()
+            return data.get("tether", {}).get("twd", None)
+    except:
+        pass
+    return None
+
 # ==========================================
 # 主程式邏輯
 # ==========================================
@@ -155,7 +169,7 @@ avg_exchange_rate = 32.5
 total_twd_in = 0
 total_usdt_got = 0
 
-# 3. 檢查資料並計算匯率
+# 3. 檢查資料並計算「歷史成本匯率」
 if not df_usdt.empty:
     try:
         total_twd_in = df_usdt["投入台幣"].sum()
@@ -179,7 +193,38 @@ if not df_tx.empty:
 # --- 側邊欄控制台 ---
 with st.sidebar:
     st.header("⚙️ 控制台")
-    manual_mode = st.toggle("🛠️ 啟用手動輸入幣價", value=False, help="當 API 無法抓到價格時，開啟此選項自行輸入價格")
+    
+    # --- 匯率設定 ---
+    st.subheader("💱 匯率設定")
+    fx_mode = st.radio(
+        "選擇台幣換算匯率來源",
+        ["自動 (Coingecko)", "手動輸入", "使用平均成本匯率"],
+        index=0,
+        help="此設定將影響「總持倉績效」中的台幣估值與損益計算"
+    )
+    
+    current_fx_rate = avg_exchange_rate # 預設使用成本匯率
+    
+    if fx_mode == "自動 (Coingecko)":
+        fetched_rate = get_usdt_twd_rate()
+        if fetched_rate:
+            current_fx_rate = fetched_rate
+            st.success(f"已抓取: {current_fx_rate:.2f}")
+        else:
+            st.warning("抓取失敗，暫用平均成本匯率")
+            
+    elif fx_mode == "手動輸入":
+        current_fx_rate = st.number_input("請輸入 USDT/TWD 匯率", value=32.50, step=0.01, format="%.2f")
+    
+    elif fx_mode == "使用平均成本匯率":
+        current_fx_rate = avg_exchange_rate
+        st.info(f"成本匯率: {current_fx_rate:.2f}")
+
+    st.markdown("---")
+    
+    # --- 幣價設定 ---
+    st.subheader("🪙 幣價設定")
+    manual_mode = st.toggle("🛠️ 啟用手動輸入幣價", value=False)
     
     unique_coins = []
     if not df_tx.empty:
@@ -189,7 +234,7 @@ with st.sidebar:
     current_prices = {}
 
     if manual_mode:
-        st.info("💡 請在下方表格輸入目前幣價 (USDT)")
+        st.info("💡 請在下方輸入幣價 (U)")
         api_prices = get_live_prices_auto(unique_coins)
         edit_data = []
         for coin in unique_coins:
@@ -201,23 +246,24 @@ with st.sidebar:
             hide_index=True,
             column_config={
                 "幣種": st.column_config.TextColumn("幣種", disabled=True),
-                "自訂價格": st.column_config.NumberColumn("價格 (U)", format="%.6f", min_value=0.0)
+                "自訂價格": st.column_config.NumberColumn("價格", format="%.6f")
             }
         )
         current_prices = dict(zip(edited_df["幣種"], edited_df["自訂價格"]))
     else:
-        if st.button("🔄 強制刷新 API 價格"):
+        if st.button("🔄 強制刷新 API"):
             find_coin_id.clear()
             get_live_prices_auto.clear() 
+            get_usdt_twd_rate.clear()
             st.cache_data.clear()
             st.rerun()
             
         current_prices = get_live_prices_auto(unique_coins)
         if not current_prices:
-            st.warning("⚠️ API 忙線中，價格顯示為 0。可切換上方開關改為手動輸入。")
+            st.warning("⚠️ API 忙線中，顯示 0")
         else:
             st.success("✅ API 連線正常")
-        st.caption(f"上次更新: {time.strftime('%H:%M:%S')}")
+        st.caption(f"更新時間: {time.strftime('%H:%M:%S')}")
 
 # --- 核心計算 ---
 if not df_tx.empty:
@@ -248,16 +294,16 @@ else:
 # ==========================================
 
 # --- 第一區：資金池 ---
-st.subheader("💰 資金池與動態匯率")
+st.subheader("💰 資金池概況 (成本面)")
 col_a, col_b, col_c = st.columns(3)
 col_a.metric("🇹🇼 總投入台幣本金", f"${total_twd_in:,.0f}")
 col_b.metric("🇺🇸 總買入 USDT", f"${total_usdt_got:,.2f}")
-col_c.metric("💱 真實平均匯率", f"{avg_exchange_rate:.2f} TWD/U")
+col_c.metric("💱 平均買入成本匯率", f"{avg_exchange_rate:.2f} TWD/U", help="這是您投入資金的歷史平均匯率")
 
 st.markdown("---")
 
-# --- 第二區：總持倉績效 (關鍵修正區) ---
-st.subheader("📈 總持倉績效")
+# --- 第二區：總持倉績效 ---
+st.subheader("📈 總持倉績效 (現值面)")
 
 total_pnl_usdt = 0
 total_roi = 0
@@ -265,32 +311,29 @@ if not df_summary.empty:
     total_pnl_usdt = df_summary["損益金額(U)"].sum()
     total_roi = (total_pnl_usdt / total_invested_in_coins * 100) if total_invested_in_coins > 0 else 0
 
-# 【關鍵計算修正】：計算台幣的實際損益
-# 公式：(目前市值 U * 平均匯率) - (總投入台幣本金)
-# 這樣如果本金 40 萬，現值 30 萬，結果就是 -10 萬，箭頭就會是紅色向下
-current_twd_value = total_portfolio_value * avg_exchange_rate
+# 【關鍵計算】：使用「側邊欄設定的匯率」來計算現值
+current_twd_value = total_portfolio_value * current_fx_rate
 net_twd_pnl = current_twd_value - total_twd_in 
 
 # 顯示用 (USDT 損益轉換台幣，僅供參考)
-twd_pnl_display = total_pnl_usdt * avg_exchange_rate
+twd_pnl_display = total_pnl_usdt * current_fx_rate
 
 m1, m2, m3 = st.columns(3)
 
 # 指標 1: 總市值估算
-# Delta 改為「與總本金的台幣差額」，這樣虧損時就會顯示紅字向下
 m1.metric(
     "總市值估算", 
     f"${total_portfolio_value:,.2f} U", 
-    delta=f"{net_twd_pnl:,.0f} TWD (實際損益)"
+    delta=f"{net_twd_pnl:,.0f} TWD (含匯差損益)",
+    help=f"台幣估值使用匯率: {current_fx_rate:.2f}"
 )
-st.caption(f"💡 目前約合 NT$ {current_twd_value:,.0f} (總投入 NT$ {total_twd_in:,.0f})")
 
 # 指標 2: 總損益金額
-# Delta 確保負號在最前面
 m2.metric(
-    "總損益金額", 
+    "總損益金額 (U)", 
     f"${total_pnl_usdt:,.2f} U", 
-    delta=f"{twd_pnl_display:,.0f} TWD (估算)"
+    delta=f"{twd_pnl_display:,.0f} TWD (僅幣價損益)",
+    help="下方 TWD 數字僅代表 USDT 賺賠換算的台幣，不包含匯差"
 )
 
 # 指標 3: ROI
@@ -304,7 +347,7 @@ st.subheader("📊 資產分佈與損益分析")
 if not df_summary.empty and total_invested_in_coins > 0:
     pie_data = df_summary[df_summary["投入金額(U)"] > 0].copy()
 
-    # 1. 圓餅圖：投入資金佔比
+    # 1. 圓餅圖：投入資金佔比 (數值在內部)
     base_pie = alt.Chart(pie_data).encode(theta=alt.Theta("投入金額(U)", stack=True))
     pie_cost_arc = base_pie.mark_arc(innerRadius=40, outerRadius=120).encode(
         color=alt.Color("幣種", scale=alt.Scale(scheme='category10'), legend=alt.Legend(title="幣種")),
@@ -318,7 +361,7 @@ if not df_summary.empty and total_invested_in_coins > 0:
     )
     chart_cost = (pie_cost_arc + pie_cost_text).properties(title="🟠 投入資金佔比 (Cost %)")
 
-    # 2. 圓餅圖：市值佔比
+    # 2. 圓餅圖：市值佔比 (數值在內部)
     base_pie_mkt = alt.Chart(pie_data).encode(theta=alt.Theta("目前市值(U)", stack=True))
     pie_mkt_arc = base_pie_mkt.mark_arc(innerRadius=40, outerRadius=120).encode(
         color=alt.Color("幣種", scale=alt.Scale(scheme='category10'), legend=None),
@@ -338,7 +381,7 @@ if not df_summary.empty and total_invested_in_coins > 0:
     with col_pie2:
         st.altair_chart(chart_mkt, use_container_width=True)
 
-    # 3. 直方圖
+    # 3. 直方圖 (拆分標籤)
     st.markdown("#### 🔻 損益分析 (PnL)")
     bar_data = df_summary.copy()
 
